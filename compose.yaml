@@ -1,0 +1,40 @@
+# ul3 behind Traefik (v2/v3). Assumes an existing Traefik container on the
+# external network "proxy" with an entrypoint "websecure" and a cert resolver
+# "letsencrypt" – adjust the names to match your setup.
+#
+# For Caddy instead, remove the labels and see Caddyfile.example.
+
+services:
+  ul3:
+    build: .
+    image: ul3:latest
+    restart: unless-stopped
+    environment:
+      PUBLIC_URL: https://ul.example.com      # optional; derived from X-Forwarded-* if unset
+      MAX_UPLOAD_MB: "100"
+      RETENTION_DAYS: "7"
+      ADMIN_PASSWORD_FILE: /run/secrets/ul3_admin   # or ADMIN_PASSWORD; unset = admin disabled
+    secrets:
+      - ul3_admin
+    volumes:
+      - ./data:/data          # uploads.db + files/  (must be writable by uid 65532)
+    networks:
+      - proxy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.ul3.rule=Host(`ul.example.com`)
+      - traefik.http.routers.ul3.entrypoints=websecure
+      - traefik.http.routers.ul3.tls.certresolver=letsencrypt
+      - traefik.http.services.ul3.loadbalancer.server.port=8080
+
+secrets:
+  ul3_admin:
+    file: ./admin_password.txt
+
+networks:
+  proxy:
+    external: true

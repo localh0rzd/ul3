@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow">
+	<meta name="color-scheme" content="light dark">
+	<title>Admin – ul3</title>
+	<link rel="icon" href="/favicon.ico">
+	<link rel="stylesheet" href="/style.css">
+	<script src="/admin.js" defer></script>
+</head>
+<body>
+	<header class="topbar">
+		<a href="/" class="brand" aria-label="Startseite"><span class="logo"></span><span>ul3</span></a>
+		<nav><a href="/">← Upload</a></nav>
+	</header>
+	<main>
+		<section class="card" id="login-card">
+			<h2>Admin</h2>
+			<form class="login" id="login">
+				<input type="password" id="pw" placeholder="Passwort" autocomplete="current-password" required>
+				<button class="btn btn-primary" type="submit">Anmelden</button>
+			</form>
+			<p class="muted" id="login-msg"></p>
+		</section>
+
+		<section class="card" id="panel" hidden>
+			<div class="section-head">
+				<h2>Alle Uploads</h2>
+				<span class="actions">
+					<button type="button" class="btn btn-sm" id="cleanup">Aufräumen jetzt ausführen</button>
+					<button type="button" class="btn btn-ghost btn-sm" id="logout">Abmelden</button>
+				</span>
+			</div>
+			<div class="stats" id="stats"></div>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>ID</th><th>Dateiname</th><th class="hide-sm">UUID</th><th class="hide-sm">Zeit</th><th class="num">Größe</th><th class="hide-sm">CRC32</th><th class="num"></th></tr></thead>
+					<tbody id="rows"></tbody>
+				</table>
+			</div>
+		</section>
+	</main>
+	<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

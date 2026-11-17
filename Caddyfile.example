@@ -1,0 +1,8 @@
+# Caddy in front of ul3 (Caddy and ul3 on the same Docker network).
+# Caddy sets X-Forwarded-Proto/Host itself and has no body-size limit by
+# default; ul3 enforces MAX_UPLOAD_MB.
+
+ul.example.com {
+	encode zstd gzip
+	reverse_proxy ul3:8080
+}

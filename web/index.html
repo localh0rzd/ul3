@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow">
+	<meta name="color-scheme" content="light dark">
+	<title>Upload – ul3</title>
+	<link rel="icon" href="/favicon.ico">
+	<link rel="stylesheet" href="/style.css">
+	<script src="/app.js" defer></script>
+</head>
+<body>
+	<header class="topbar">
+		<a href="/" class="brand" aria-label="Startseite"><span class="logo"></span><span>ul3</span></a>
+		<nav>
+			<a href="#upload">Upload</a>
+			<a href="#history">Hochgeladene Dateien</a>
+			<a href="#sharex">ShareX</a>
+		</nav>
+	</header>
+
+	<main>
+		<section id="upload" class="card dropzone">
+			<h1>Upload<small>Script</small></h1>
+			<label class="btn btn-primary btn-lg">
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l5 5h-3v6h-4V8H7l5-5zm-7 14h14v4H5v-4z"/></svg>
+				Dateien auswählen &amp; hochladen
+				<input type="file" id="file-input" multiple hidden>
+			</label>
+			<p class="muted">Oder Dateien hierher ziehen – oder mit <kbd>Strg</kbd>+<kbd>V</kbd> einfügen.</p>
+			<ul id="progress" class="progress-list"></ul>
+		</section>
+
+		<section id="history" class="card">
+			<div class="section-head">
+				<h2>Hochgeladene Dateien</h2>
+				<button type="button" class="btn btn-ghost btn-sm" id="refresh">Aktualisieren</button>
+			</div>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Dateiname</th><th class="hide-sm">Hochgeladen</th><th class="hide-sm num">Größe</th><th class="num">Aktionen</th></tr></thead>
+					<tbody id="history-body"><tr><td colspan="4" class="muted"><em>Lade…</em></td></tr></tbody>
+				</table>
+			</div>
+		</section>
+
+		<section class="card">
+			<h2>Hinweise</h2>
+			<ul class="notes">
+				<li>Dateien werden zusammen mit deiner <strong>UUID</strong> bis zu <strong id="retention">7 Tage</strong> aufbewahrt.</li>
+				<li>Die maximale Dateigröße beträgt <strong id="maxsize">–</strong>.</li>
+				<li>Unter „Hochgeladene Dateien“ stehen alle Dateien, die unter deiner UUID hochgeladen wurden.</li>
+				<li>Deine UUID: <code id="uuid"></code>
+					<button type="button" class="btn btn-ghost btn-sm" id="copy-uuid">Kopieren</button>
+					<button type="button" class="btn btn-ghost btn-sm" id="set-uuid">Andere UUID verwenden</button>
+				</li>
+			</ul>
+		</section>
+
+		<section id="sharex" class="card">
+			<div class="section-head">
+				<h2>ShareX-Konfiguration</h2>
+				<button type="button" class="btn btn-ghost btn-sm" id="sharex-download">.sxcu herunterladen</button>
+			</div>
+			<p class="muted">Enthält deine UUID – so erscheinen ShareX-Uploads auch hier in der Liste.</p>
+			<pre id="sharex-config"></pre>
+		</section>
+	</main>
+
+	<footer><a href="/admin" id="admin-link" hidden>Admin</a></footer>
+
+	<div id="drop-overlay" hidden><div>Dateien loslassen zum Hochladen</div></div>
+	<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
