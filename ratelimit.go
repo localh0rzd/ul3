@@ -104,9 +104,15 @@ func (l *limiter) Refund(key string, n float64) {
 
 // ---------- client identity ----------
 
-// Loopback and private ranges: where a reverse proxy in front of ul3 lives in
-// practically every deployment (Docker networks included).
-const defaultTrustedProxies = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+// defaultTrustedProxies trusts no one: X-Forwarded-For is ignored unless the
+// operator names the proxy. Trusting private ranges by default let clients
+// spoof their address whenever ul3 was reached directly from such a range
+// (LAN, docker-proxy, a load balancer that passes the header through).
+const defaultTrustedProxies = "none"
+
+// privateProxyRanges is the usual TRUSTED_PROXIES value behind a reverse proxy
+// on the same host or Docker network (see compose.yaml).
+const privateProxyRanges = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 
 func parseTrustedProxies(s string) ([]netip.Prefix, error) {
 	if strings.TrimSpace(s) == "none" {
@@ -164,6 +170,21 @@ func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 		}
 	}
 	return ip
+}
+
+// adminKey is the key for failed admin logins. It is coarser than clientKey
+// for IPv6 (a /48, the usual allocation to one customer), so rotating through
+// a provider's /64s does not multiply the guesses an attacker gets.
+func (a *app) adminKey(r *http.Request) string {
+	ip := clientIP(r, a.cfg.TrustedProxies)
+	if !ip.IsValid() {
+		return r.RemoteAddr
+	}
+	if ip.Is6() {
+		p, _ := ip.Prefix(48)
+		return p.String()
+	}
+	return ip.String()
 }
 
 // clientKey is the rate-limit key: the client IPv4 address, or its IPv6 /64

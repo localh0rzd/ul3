@@ -1,0 +1,7 @@
+.git
+data
+*.md
+compose*.yaml
+Caddyfile*
+Dockerfile
+admin_password*.txt

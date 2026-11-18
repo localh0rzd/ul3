@@ -1,0 +1,3 @@
+# Runtime data (uploads.db, uploaded files) and the admin secret – never commit.
+/data/
+admin_password*.txt

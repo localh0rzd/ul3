@@ -20,13 +20,13 @@ Small anonymous file upload service – successor of ul2 (PHP).
 | `MAX_UPLOAD_MB` | `100` | Per-file limit, enforced server-side while streaming. |
 | `RETENTION_DAYS` | `7` | |
 | `CLEANUP_INTERVAL_MINUTES` | `60` | |
-| `ADMIN_PASSWORD` / `ADMIN_PASSWORD_FILE` | – | Unset = admin disabled. Must be at least 16 characters, otherwise admin stays disabled (logged at startup). Failed logins lock out per client and, after 50 failures from all clients together, globally (refill 30/h). |
+| `ADMIN_PASSWORD` / `ADMIN_PASSWORD_FILE` | – | Unset = admin disabled. Must be at least 16 characters, otherwise admin stays disabled (logged at startup). Failed logins lock out per IPv4 address or IPv6 /48 (10 tries, then one per 10 minutes); there is no global lockout, so others cannot lock you out. Use a random password (`openssl rand -base64 24`). |
 | `DATA_DIR` | `/data` | Holds `uploads.db` and `files/`. |
 | `UPLOADS_PER_HOUR` | `120` | Per client (IPv4 address / IPv6 /64). `0` = unlimited. |
 | `UPLOAD_MB_PER_HOUR` | `2048` | Per client. `0` = unlimited. |
 | `MIN_FREE_MB` | `1024` | Uploads get `507` when free disk space minus the bytes reserved by uploads still in progress would drop below this. `0` = off. |
 | `UPLOAD_TIMEOUT_MINUTES` | `30` | Maximum time to receive one upload. Other requests must arrive within 1 minute. |
-| `TRUSTED_PROXIES` | loopback + private ranges | CIDRs whose `X-Forwarded-For` is believed when finding the client IP for the limits above. Set to `none` if ul3 is reachable without a reverse proxy, or clients can spoof their IP. |
+| `TRUSTED_PROXIES` | `none` | Comma-separated CIDRs/IPs whose `X-Forwarded-For` is believed when finding the client IP for the limits above. Behind a reverse proxy, set it to the proxy's network (`compose.yaml` sets the private ranges). Never include addresses clients can connect from directly, or they can spoof their IP. |
 | `LISTEN` | `:8080` | |
 
 ## Deploy
@@ -37,7 +37,9 @@ mkdir -p data && sudo chown 65532:65532 data
 docker compose up -d --build
 ```
 
-Rate limits key on the client IP taken from the proxy's `X-Forwarded-For`; the default `TRUSTED_PROXIES` covers Docker networks. If every request is logged with the same `client=` address, the proxy isn't trusted and all users share one limit.
+Rate limits key on the client IP taken from the proxy's `X-Forwarded-For`, which is only believed from `TRUSTED_PROXIES` (set in `compose.yaml` to the private ranges Docker networks use). If every request is logged with the same `client=` address, the proxy isn't trusted and all users share one limit.
+
+**Upgrading:** `TRUSTED_PROXIES` used to default to the private ranges and now defaults to `none`. If you run ul3 behind a proxy without setting it, add `TRUSTED_PROXIES` (e.g. `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`).
 
 `compose.yaml` contains Traefik labels (edit host, entrypoint, cert resolver, network). For Caddy, drop the labels and use `Caddyfile.example`. Neither proxy limits body size by default; if you put nginx in between, raise `client_max_body_size`.
 

@@ -19,7 +19,7 @@ import (
 )
 
 func testConfig() config {
-	trusted, _ := parseTrustedProxies(defaultTrustedProxies)
+	trusted, _ := parseTrustedProxies(privateProxyRanges)
 	return config{
 		MaxBytes: 1 << 20, Retention: time.Hour, CleanupEvery: time.Hour,
 		AdminPassword:  "correct horse battery staple",
@@ -359,6 +359,32 @@ func TestAdminLockout(t *testing.T) {
 	}
 }
 
+// Follow-up to dropping the global lockout: rotating through the /64s of one
+// IPv6 /48 must not give an attacker 10 fresh guesses per /64.
+func TestAdminLockoutCoversIPv6Slash48(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	try := func(remote, pw string) int {
+		req := httptest.NewRequest("GET", "/api/admin/uploads", nil)
+		req.RemoteAddr = remote
+		req.Header.Set("Authorization", "Bearer "+pw)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range 10 {
+		if c := try(fmt.Sprintf("[2001:db8:7:%x::1]:443", i), "wrong"); c != 401 {
+			t.Fatalf("attempt %d: %d, want 401", i, c)
+		}
+	}
+	if c := try("[2001:db8:7:ffff::1]:443", a.cfg.AdminPassword); c != http.StatusTooManyRequests {
+		t.Fatalf("new /64 in the same /48: %d, want 429", c)
+	}
+	if c := try("[2001:db8:8::1]:443", a.cfg.AdminPassword); c != http.StatusOK {
+		t.Fatalf("other /48: %d, want 200", c)
+	}
+}
+
 func TestLookupRateLimit(t *testing.T) {
 	a := newTestApp(t, nil)
 	h := a.routes()
@@ -372,7 +398,7 @@ func TestLookupRateLimit(t *testing.T) {
 }
 
 func TestClientIP(t *testing.T) {
-	trusted, _ := parseTrustedProxies(defaultTrustedProxies)
+	trusted, _ := parseTrustedProxies(privateProxyRanges)
 	for _, tc := range []struct{ remote, xff, want string }{
 		{"203.0.113.9:1234", "", "203.0.113.9"},
 		{"203.0.113.9:1234", "1.2.3.4", "203.0.113.9"},          // untrusted peer: XFF ignored
@@ -396,6 +422,21 @@ func TestClientIP(t *testing.T) {
 	req.RemoteAddr = "[2001:db8:1:2:3:4:5:6]:443"
 	if got := a.clientKey(req); got != "2001:db8:1:2::/64" {
 		t.Errorf("v6 key = %s", got)
+	}
+}
+
+// LOW finding: the default trusted all private ranges, so a client reaching
+// ul3 directly from one could pick its rate-limit key via X-Forwarded-For.
+func TestDefaultTrustsNoProxy(t *testing.T) {
+	trusted, err := parseTrustedProxies(defaultTrustedProxies)
+	if err != nil || len(trusted) != 0 {
+		t.Fatalf("default trusted proxies = %v, %v; want none", trusted, err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "172.17.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
+	if got := clientIP(req, trusted); got != netip.MustParseAddr("172.17.0.1") {
+		t.Fatalf("spoofed XFF believed by default: got %s", got)
 	}
 }
 
@@ -518,26 +559,28 @@ func TestDiskGuardCountsInFlightUploads(t *testing.T) {
 	}
 }
 
-// MEDIUM finding: admin lockout was per client only, so rotating addresses
-// (e.g. through an IPv6 /48) allowed unbounded guessing.
-func TestAdminGlobalLockout(t *testing.T) {
+// LOW finding: a lockout shared by all clients let anyone lock the admin out
+// with 50 wrong passwords. Failures from other clients must not block the
+// admin; the 16-character minimum is what defeats distributed guessing.
+func TestAdminNotLockedOutByOtherClients(t *testing.T) {
 	a := newTestApp(t, nil)
 	h := a.routes()
-	try := func(i int, pw string) int {
+	try := func(remote, pw string) int {
 		req := httptest.NewRequest("GET", "/api/admin/uploads", nil)
-		req.RemoteAddr = fmt.Sprintf("[2001:db8:%x::1]:443", i) // a new /64 each time
+		req.RemoteAddr = remote
 		req.Header.Set("Authorization", "Bearer "+pw)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	for i := range 50 {
-		if c := try(i, "wrong"); c != 401 {
-			t.Fatalf("attempt %d: %d, want 401", i, c)
+	for i := range 200 {
+		remote := fmt.Sprintf("[2001:db8:%x::1]:443", i) // a new /64 each time
+		for range 10 {
+			try(remote, "wrong")
 		}
 	}
-	if c := try(999, a.cfg.AdminPassword); c != http.StatusTooManyRequests {
-		t.Fatalf("after 50 failures from 50 clients: %d, want 429", c)
+	if c := try("198.51.100.7:4000", a.cfg.AdminPassword); c != http.StatusOK {
+		t.Fatalf("admin after 2000 failures from other clients: %d, want 200", c)
 	}
 }
 

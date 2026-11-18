@@ -89,6 +89,9 @@ func loadConfig() config {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+	if len(trusted) == 0 {
+		slog.Info("TRUSTED_PROXIES not set: X-Forwarded-For is ignored; behind a reverse proxy set it to the proxy's network, or all clients share one rate limit")
+	}
 	return config{
 		Listen:        env("LISTEN", ":8080"),
 		DataDir:       env("DATA_DIR", "/data"),

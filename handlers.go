@@ -32,11 +32,10 @@ type app struct {
 	files    *os.Root
 	filesDir string
 
-	uploads       *limiter // upload requests per client
-	uploadBytes   *limiter // uploaded bytes per client
-	lookups       *limiter // history/delete requests per client (UUID guessing)
-	adminFails    *limiter // failed admin logins per client
-	adminFailsAll *limiter // failed admin logins from all clients together
+	uploads     *limiter // upload requests per client
+	uploadBytes *limiter // uploaded bytes per client
+	lookups     *limiter // history/delete requests per client (UUID guessing)
+	adminFails  *limiter // failed admin logins per client
 
 	// inFlight is the number of bytes reserved by uploads that are still
 	// being received; the low-disk guard counts them as already used.
@@ -49,9 +48,10 @@ func newApp(cfg config, st *store, files *os.Root, filesDir string) *app {
 		uploads:     newLimiter(float64(cfg.UploadsPerHour), float64(cfg.UploadsPerHour)),
 		uploadBytes: newLimiter(float64(cfg.UploadMBPerHour<<20), float64(cfg.UploadMBPerHour<<20)),
 		lookups:     newLimiter(3600, 120), // 1/s sustained, bursts of 120
-		adminFails:  newLimiter(6, 10),     // 10 tries, then one per 10 minutes
-		// Caps guessing from many addresses (e.g. a rotated IPv6 /48) at 30/h.
-		adminFailsAll: newLimiter(30, 50),
+		// 10 tries, then one per 10 minutes, per IPv4 address or IPv6 /48
+		// (adminKey). Deliberately not shared by all clients: that would let
+		// anyone lock the admin out.
+		adminFails: newLimiter(6, 10),
 	}
 }
 
@@ -133,8 +133,8 @@ func (a *app) admin(h http.HandlerFunc) http.HandlerFunc {
 			jsonErr(w, http.StatusNotFound, "Admin-Bereich ist deaktiviert")
 			return
 		}
-		key := a.clientKey(r)
-		if !a.adminFails.Available(key) || !a.adminFailsAll.Available("*") {
+		key := a.adminKey(r)
+		if !a.adminFails.Available(key) {
 			jsonErr(w, http.StatusTooManyRequests, "Zu viele Fehlversuche – bitte später erneut versuchen")
 			return
 		}
@@ -142,7 +142,6 @@ func (a *app) admin(h http.HandlerFunc) http.HandlerFunc {
 		want := sha256.Sum256([]byte(a.cfg.AdminPassword))
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			a.adminFails.Charge(key, 1)
-			a.adminFailsAll.Charge("*", 1)
 			slog.Warn("admin auth failed", "client", key)
 			jsonErr(w, http.StatusUnauthorized, "Zugriff verweigert")
 			return

@@ -14,6 +14,9 @@ services:
       MAX_UPLOAD_MB: "100"
       RETENTION_DAYS: "7"
       ADMIN_PASSWORD_FILE: /run/secrets/ul3_admin   # or ADMIN_PASSWORD; unset = admin disabled
+      # Believe X-Forwarded-For only from the proxy's Docker network. Narrow this
+      # to the "proxy" network's subnet (docker network inspect proxy) if you can.
+      TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7
     secrets:
       - ul3_admin
     volumes:
