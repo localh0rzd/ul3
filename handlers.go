@@ -87,7 +87,7 @@ func (a *app) routes() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		static.ServeHTTP(w, r)
 	}))
-	return logRequests(securityHeaders(mux))
+	return a.logRequests(securityHeaders(mux))
 }
 
 // ---------- middleware ----------
@@ -115,7 +115,7 @@ func (s *statusWriter) WriteHeader(c int) { s.status = c; s.ResponseWriter.Write
 // Unwrap lets http.ResponseController reach the connection (read deadlines).
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-func logRequests(next http.Handler) http.Handler {
+func (a *app) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		start := time.Now()
@@ -123,7 +123,7 @@ func logRequests(next http.Handler) http.Handler {
 		if r.URL.Path == "/healthz" {
 			return
 		}
-		slog.Info("req", "method", r.Method, "path", r.URL.Path, "status", sw.status, "dur", time.Since(start).Round(time.Millisecond))
+		slog.Info("req", "client", a.clientAddr(r), "method", r.Method, "path", r.URL.Path, "status", sw.status, "dur", time.Since(start).Round(time.Millisecond))
 	})
 }
 
@@ -142,7 +142,7 @@ func (a *app) admin(h http.HandlerFunc) http.HandlerFunc {
 		want := sha256.Sum256([]byte(a.cfg.AdminPassword))
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			a.adminFails.Charge(key, 1)
-			slog.Warn("admin auth failed", "client", key)
+			slog.Warn("admin auth failed", "client", a.clientAddr(r))
 			jsonErr(w, http.StatusUnauthorized, "Zugriff verweigert")
 			return
 		}
@@ -370,7 +370,7 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stored = size
-	slog.Info("uploaded", "id", id, "file", saved, "bytes", size, "client", key)
+	slog.Info("uploaded", "id", id, "file", saved, "bytes", size, "client", a.clientAddr(r))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":  id,
 		"url":      a.fileURL(r, saved),

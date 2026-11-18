@@ -172,6 +172,15 @@ func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	return ip
 }
 
+// clientAddr is the full client IP for logging (rate-limit keys are coarser
+// for IPv6), resolved through TRUSTED_PROXIES like the keys.
+func (a *app) clientAddr(r *http.Request) string {
+	if ip := clientIP(r, a.cfg.TrustedProxies); ip.IsValid() {
+		return ip.String()
+	}
+	return r.RemoteAddr
+}
+
 // adminKey is the key for failed admin logins. It is coarser than clientKey
 // for IPv6 (a /48, the usual allocation to one customer), so rotating through
 // a provider's /64s does not multiply the guesses an attacker gets.
