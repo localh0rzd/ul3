@@ -119,17 +119,43 @@ const queue = [];
 let active = 0;
 const MAX_PARALLEL = 3;
 
+// A job is one file: state "queued" → "uploading" → "done" | "failed" | "cancelled".
+const pending = (job) => job.state === "queued" || job.state === "uploading";
+
 function addFiles(files) {
-	for (const file of files) {
-		if (!(file instanceof File)) continue;
-		const item = progressItem(file);
+	const list = [...files].filter((f) => f instanceof File);
+	if (!list.length) return;
+	const batch = list.length > 1 ? batchItem(list.length) : null;
+	for (const file of list) {
+		const job = { file, state: "queued", xhr: null, batch };
+		job.item = progressItem(file, () => cancel(job));
+		(batch ? batch.list : $("#progress"))[batch ? "append" : "prepend"](job.item.li);
+		batch?.jobs.push(job);
 		if (file.size > cfg.maxBytes) {
-			item.fail(`zu groß (max. ${fmtSize(cfg.maxBytes)})`);
+			setState(job, "failed");
+			job.item.fail(`zu groß (max. ${fmtSize(cfg.maxBytes)})`);
 			continue;
 		}
-		queue.push({ file, item });
+		queue.push(job);
 	}
+	batch?.update();
 	pump();
+}
+
+function setState(job, state) {
+	job.state = state;
+	if (!pending(job)) job.item.settle();
+	job.batch?.update();
+}
+
+function cancel(job) {
+	if (job.state === "queued") {
+		queue.splice(queue.indexOf(job), 1);
+		setState(job, "cancelled");
+		job.item.cancelled();
+	} else if (job.state === "uploading") {
+		job.xhr.abort(); // onabort finishes the job
+	}
 }
 
 function pump() {
@@ -140,17 +166,52 @@ function pump() {
 	}
 }
 
-function progressItem(file) {
-	const bar = el("div");
-	const status = el("span", { class: "status" }, "wartet…");
-	const li = el("li", { class: "pitem" },
-		el("div", { class: "row" }, el("span", { class: "name", title: file.name }, file.name), status),
-		el("div", { class: "bar" }, bar),
+function batchItem(total) {
+	const summary = el("span", { class: "status" });
+	const cancelAll = el("button", {
+		type: "button", class: "btn btn-ghost btn-sm btn-danger",
+		onclick: () => {
+			// queued ones first, so aborting a running upload cannot start them
+			const jobs = [...b.jobs].sort((x, y) => (y.state === "queued") - (x.state === "queued"));
+			jobs.forEach(cancel);
+		},
+	}, "Alle abbrechen");
+	const list = el("ul", { class: "progress-list" });
+	const li = el("li", { class: "pbatch" },
+		el("div", { class: "row" }, el("span", { class: "name" }, `${total} Dateien`), summary, cancelAll),
+		list,
 	);
 	$("#progress").prepend(li);
+	const b = {
+		jobs: [], list,
+		update() {
+			const n = (st) => b.jobs.filter((j) => j.state === st).length;
+			const parts = [`${n("done")}/${total} fertig`];
+			if (n("failed")) parts.push(`${n("failed")} fehlgeschlagen`);
+			if (n("cancelled")) parts.push(`${n("cancelled")} abgebrochen`);
+			summary.textContent = parts.join(" · ");
+			cancelAll.hidden = !b.jobs.some(pending);
+		},
+	};
+	return b;
+}
+
+function progressItem(file, onCancel) {
+	const bar = el("div");
+	const status = el("span", { class: "status" }, "wartet…");
+	const cancelBtn = el("button", {
+		type: "button", class: "btn btn-ghost btn-sm btn-icon", title: "Abbrechen", "aria-label": `${file.name} abbrechen`, onclick: onCancel,
+	}, "✕");
+	const li = el("li", { class: "pitem" },
+		el("div", { class: "row" }, el("span", { class: "name", title: file.name }, file.name), status, cancelBtn),
+		el("div", { class: "bar" }, bar),
+	);
 	return {
+		li,
+		settle() { cancelBtn.remove(); },
 		progress(p) { bar.style.width = `${p}%`; status.textContent = `${p} %`; },
 		fail(msg) { li.classList.add("err"); status.textContent = msg; },
+		cancelled() { li.classList.add("cancelled"); status.textContent = "abgebrochen"; },
 		done(url) {
 			li.classList.add("ok");
 			bar.style.width = "100%";
@@ -165,27 +226,33 @@ function progressItem(file) {
 	};
 }
 
-function upload({ file, item }) {
+function upload(job) {
+	const { file, item } = job;
 	return new Promise((resolve) => {
 		const fd = new FormData();
 		fd.append("uuid", uuid);
 		fd.append("file-upload", file);
 		const xhr = new XMLHttpRequest();
+		job.xhr = xhr;
 		xhr.open("POST", "/api/upload");
 		xhr.responseType = "json";
 		xhr.upload.onprogress = (e) => { if (e.lengthComputable) item.progress(Math.round((e.loaded / e.total) * 100)); };
 		xhr.onload = () => {
 			const res = xhr.response || {};
 			if (xhr.status === 200 && res.success != null) {
+				setState(job, "done");
 				item.done(res.url);
 				$("#empty")?.remove();
 				tbody.prepend(fileRow({ id: res.success, filename: res.filename, url: res.url, time: Date.now() / 1000, size: file.size }, true));
 			} else {
+				setState(job, "failed");
 				item.fail(res.error || `Fehler (HTTP ${xhr.status})`);
 			}
 			resolve();
 		};
-		xhr.onerror = () => { item.fail("Netzwerkfehler"); resolve(); };
+		xhr.onerror = () => { setState(job, "failed"); item.fail("Netzwerkfehler"); resolve(); };
+		xhr.onabort = () => { setState(job, "cancelled"); item.cancelled(); resolve(); };
+		setState(job, "uploading");
 		item.progress(0);
 		xhr.send(fd);
 	});

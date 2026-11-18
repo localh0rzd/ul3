@@ -340,9 +340,14 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 			saved, size, crc, err = a.saveFile(part, origName)
 			if err != nil {
 				cleanup()
-				if errors.Is(err, errTooLarge) {
+				switch {
+				case errors.Is(err, errTooLarge):
 					jsonErr(w, http.StatusRequestEntityTooLarge, "Datei ist zu groß")
-				} else {
+				case errors.Is(err, io.ErrUnexpectedEOF):
+					// The client cancelled or lost the connection mid-file.
+					slog.Info("upload aborted", "file", origName, "client", a.clientAddr(r))
+					jsonErr(w, http.StatusBadRequest, "Upload abgebrochen")
+				default:
 					slog.Error("save upload", "err", err)
 					jsonErr(w, http.StatusInternalServerError, "Fehler beim Hochladen von "+origName)
 				}

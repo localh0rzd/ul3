@@ -266,6 +266,29 @@ func TestHistoryShowsOriginalName(t *testing.T) {
 }
 
 // MEDIUM finding: unlimited anonymous uploads.
+func TestAbortedUploadLeavesNothingBehind(t *testing.T) {
+	a := newTestApp(t, nil)
+	body, ct := multipartBody(t, "aborted-uuid-1234", "big.bin", strings.Repeat("x", 64<<10))
+	cut := bytes.NewReader(body.Bytes()[:body.Len()/2]) // connection dropped mid-file
+	req := httptest.NewRequest("POST", "/api/upload", cut)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	a.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	entries, err := os.ReadDir(a.filesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("files left behind: %v", entries)
+	}
+	if h := get(a.routes(), "/api/history?uuid=aborted-uuid-1234"); strings.Contains(h.Body.String(), "big.bin") {
+		t.Fatalf("aborted upload listed in history: %s", h.Body)
+	}
+}
+
 func TestUploadRateLimit(t *testing.T) {
 	a := newTestApp(t, func(c *config) { c.UploadsPerHour = 2 })
 	h := a.routes()
