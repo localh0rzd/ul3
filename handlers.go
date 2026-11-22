@@ -73,6 +73,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/config", a.handleConfig)
 	mux.HandleFunc("POST /api/upload", a.handleUpload)
 	mux.HandleFunc("POST /upload.php", a.handleUpload) // ul2 / old ShareX configs
+	mux.HandleFunc("PUT /{$}", a.handlePut)            // curl -T - https://host/ (stdin)
+	mux.HandleFunc("PUT /{name}", a.handlePut)         // curl -T file https://host/
 	mux.HandleFunc("GET /api/history", a.handleHistory)
 	mux.HandleFunc("POST /api/delete", a.handleDelete)
 	mux.HandleFunc("GET /api/admin/uploads", a.admin(a.handleAdminList))
@@ -266,31 +268,36 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 var errTooLarge = errors.New("too large")
 
-// handleUpload streams a single multipart file straight to disk.
-// Response shape is compatible with ul2: {success: id, url, filename}.
-func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
+// beginUpload runs the checks every upload passes before its body is read:
+// hourly byte and request budgets, the low-disk guard, and the longer read
+// deadline. On success the caller must call done with the bytes that stayed
+// on disk (0 on failure) so the unused reservation is refunded.
+func (a *app) beginUpload(w http.ResponseWriter, r *http.Request, fail errFunc) (done func(stored int64), ok bool) {
 	key := a.clientKey(r)
 	// Reserve the largest file this request can carry *before* reading it, so
 	// parallel uploads cannot all pass the byte budget and the disk guard at
 	// once. The unused part is refunded when the upload ends.
 	reserve := a.uploadReservation(r)
 	if !a.uploadBytes.Take(key, float64(reserve)) {
-		jsonErr(w, http.StatusTooManyRequests, "Zu viele Uploads – bitte später erneut versuchen")
-		return
+		fail(w, http.StatusTooManyRequests, "Zu viele Uploads – bitte später erneut versuchen")
+		return nil, false
 	}
-	var stored int64 // bytes that stay on disk once the upload succeeded
-	defer func() { a.uploadBytes.Refund(key, float64(reserve-stored)) }()
+	refund := func(stored int64) { a.uploadBytes.Refund(key, float64(reserve-stored)) }
 	if !a.uploads.Take(key, 1) {
-		jsonErr(w, http.StatusTooManyRequests, "Zu viele Uploads – bitte später erneut versuchen")
-		return
+		refund(0)
+		fail(w, http.StatusTooManyRequests, "Zu viele Uploads – bitte später erneut versuchen")
+		return nil, false
 	}
+	release := func() {}
 	if a.cfg.MinFreeBytes > 0 {
 		pending := a.inFlight.Add(reserve) // includes this upload
-		defer a.inFlight.Add(-reserve)
+		release = func() { a.inFlight.Add(-reserve) }
 		if free, err := diskFree(a.filesDir); err == nil && free-pending < a.cfg.MinFreeBytes {
+			release()
+			refund(0)
 			slog.Warn("upload refused: low disk space", "free_mb", free>>20, "in_flight_mb", pending>>20)
-			jsonErr(w, http.StatusInsufficientStorage, "Kein Speicherplatz mehr frei – bitte später erneut versuchen")
-			return
+			fail(w, http.StatusInsufficientStorage, "Kein Speicherplatz mehr frei – bitte später erneut versuchen")
+			return nil, false
 		}
 	}
 	// The server's ReadTimeout is short; uploads get their own, longer deadline.
@@ -298,6 +305,55 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 		!errors.Is(err, http.ErrNotSupported) {
 		slog.Warn("set upload read deadline", "err", err)
 	}
+	return func(stored int64) { release(); refund(stored) }, true
+}
+
+type errFunc func(w http.ResponseWriter, status int, msg string)
+
+func textErr(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	io.WriteString(w, msg+"\n")
+}
+
+// failSave reports an error returned by saveFile.
+func (a *app) failSave(w http.ResponseWriter, r *http.Request, fail errFunc, err error, origName string) {
+	switch {
+	case errors.Is(err, errTooLarge):
+		fail(w, http.StatusRequestEntityTooLarge, "Datei ist zu groß")
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		// The client cancelled or lost the connection mid-file.
+		slog.Info("upload aborted", "file", origName, "client", a.clientAddr(r))
+		fail(w, http.StatusBadRequest, "Upload abgebrochen")
+	default:
+		slog.Error("save upload", "err", err)
+		fail(w, http.StatusInternalServerError, "Fehler beim Hochladen von "+origName)
+	}
+}
+
+// recordUpload inserts a saved file into the database, removing it on error.
+func (a *app) recordUpload(w http.ResponseWriter, r *http.Request, fail errFunc, owner, saved string, size int64, crc uint32) (int64, bool) {
+	id, err := a.store.Insert(r.Context(), owner, saved, crc, time.Now())
+	if err != nil {
+		_ = a.removeStored(saved)
+		slog.Error("insert upload", "err", err)
+		fail(w, http.StatusInternalServerError, "Datenbankfehler")
+		return 0, false
+	}
+	slog.Info("uploaded", "id", id, "file", saved, "bytes", size, "client", a.clientAddr(r))
+	return id, true
+}
+
+// handleUpload streams a single multipart file straight to disk.
+// Response shape is compatible with ul2: {success: id, url, filename}.
+func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
+	done, ok := a.beginUpload(w, r, jsonErr)
+	if !ok {
+		return
+	}
+	var stored int64 // bytes that stay on disk once the upload succeeded
+	defer func() { done(stored) }()
 
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxBytes+1<<20)
 	mr, err := r.MultipartReader()
@@ -340,17 +396,7 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 			saved, size, crc, err = a.saveFile(part, origName)
 			if err != nil {
 				cleanup()
-				switch {
-				case errors.Is(err, errTooLarge):
-					jsonErr(w, http.StatusRequestEntityTooLarge, "Datei ist zu groß")
-				case errors.Is(err, io.ErrUnexpectedEOF):
-					// The client cancelled or lost the connection mid-file.
-					slog.Info("upload aborted", "file", origName, "client", a.clientAddr(r))
-					jsonErr(w, http.StatusBadRequest, "Upload abgebrochen")
-				default:
-					slog.Error("save upload", "err", err)
-					jsonErr(w, http.StatusInternalServerError, "Fehler beim Hochladen von "+origName)
-				}
+				a.failSave(w, r, jsonErr, err, origName)
 				return
 			}
 		}
@@ -367,20 +413,58 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := a.store.Insert(r.Context(), owner, saved, crc, time.Now())
-	if err != nil {
-		cleanup()
-		slog.Error("insert upload", "err", err)
-		jsonErr(w, http.StatusInternalServerError, "Datenbankfehler")
+	id, ok := a.recordUpload(w, r, jsonErr, owner, saved, size, crc)
+	if !ok {
 		return
 	}
 	stored = size
-	slog.Info("uploaded", "id", id, "file", saved, "bytes", size, "client", a.clientAddr(r))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":  id,
 		"url":      a.fileURL(r, saved),
 		"filename": displayName(saved),
 	})
+}
+
+// handlePut takes the raw request body as the file, for
+// `curl -T file https://host/` (curl appends the file name to a URL ending in
+// "/"). It answers with the file URL as plain text, so the output can be
+// piped or copied directly. The owner UUID is optional: ?uuid=.
+func (a *app) handlePut(w http.ResponseWriter, r *http.Request) {
+	owner := r.URL.Query().Get("uuid")
+	if owner != "" && !reOwner.MatchString(owner) {
+		textErr(w, http.StatusBadRequest, "Ungültige UUID")
+		return
+	}
+	// Refuse a declared oversize body before curl sends it (Expect: 100-continue).
+	if r.ContentLength > a.cfg.MaxBytes {
+		textErr(w, http.StatusRequestEntityTooLarge, "Datei ist zu groß")
+		return
+	}
+	origName := r.PathValue("name")
+	if origName == "" || origName == "-" { // no name, or curl -T - (stdin)
+		origName = "file"
+	}
+
+	done, ok := a.beginUpload(w, r, textErr)
+	if !ok {
+		return
+	}
+	var stored int64
+	defer func() { done(stored) }()
+
+	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxBytes+1)
+	saved, size, crc, err := a.saveFile(r.Body, origName)
+	if err != nil {
+		a.failSave(w, r, textErr, err, origName)
+		return
+	}
+	if _, ok := a.recordUpload(w, r, textErr, owner, saved, size, crc); !ok {
+		return
+	}
+	stored = size
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	io.WriteString(w, a.fileURL(r, saved)+"\n")
 }
 
 // uploadReservation is the most file data a request can deliver: the body

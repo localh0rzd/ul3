@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -616,5 +617,212 @@ func TestShortAdminPasswordDisablesAdmin(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "0123456789abcdef")
 	if pw := loadConfig().AdminPassword; pw != "0123456789abcdef" {
 		t.Fatalf("16-char password rejected")
+	}
+}
+
+func doPut(h http.Handler, target, content string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("PUT", target, strings.NewReader(content))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPutUploadReturnsPlainURL(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	uuid := "0123456789abcdef"
+	rec := doPut(h, "/report%20final.txt?uuid="+uuid, "hello curl")
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content type %q", ct)
+	}
+	u, err := url.Parse(strings.TrimSuffix(rec.Body.String(), "\n"))
+	if err != nil || !strings.HasSuffix(rec.Body.String(), "\n") {
+		t.Fatalf("body %q", rec.Body)
+	}
+	if !regexp.MustCompile(`^/files/[A-Za-z0-9_-]{22}/report final\.txt$`).MatchString(u.Path) {
+		t.Fatalf("path %q", u.Path)
+	}
+	if got := get(h, u.EscapedPath()); got.Body.String() != "hello curl" {
+		t.Fatalf("download %q", got.Body)
+	}
+	hist := get(h, "/api/history?uuid="+uuid)
+	if !strings.Contains(hist.Body.String(), "report final.txt") {
+		t.Fatalf("history %s", hist.Body)
+	}
+}
+
+func TestPutStdinGetsDefaultName(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	for _, target := range []string{"/", "/-"} {
+		rec := doPut(h, target, "x")
+		if rec.Code != 200 || !strings.HasSuffix(strings.TrimSpace(rec.Body.String()), "/file") {
+			t.Fatalf("%s: %d %q", target, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestPutRejectsOversizeAndBadUUID(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	if rec := doPut(h, "/big.bin", strings.Repeat("x", int(a.cfg.MaxBytes)+1)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize: %d", rec.Code)
+	}
+	if rec := doPut(h, "/a.txt?uuid=../x", "x"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad uuid: %d", rec.Code)
+	}
+	entries, _ := os.ReadDir(a.filesDir)
+	if len(entries) != 0 {
+		t.Fatalf("left behind %d entries", len(entries))
+	}
+}
+
+func TestPutCountsTowardRateLimit(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.UploadsPerHour = 1 })
+	h := a.routes()
+	if rec := doPut(h, "/a.txt", "x"); rec.Code != 200 {
+		t.Fatalf("first: %d", rec.Code)
+	}
+	if rec := doPut(h, "/b.txt", "x"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second: %d", rec.Code)
+	}
+}
+
+// Names come from the URL path, where %2F decodes to "/": they must still end
+// up as one canonical file name inside a fresh token directory.
+func TestPutNameCannotEscapeTokenDir(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	cases := map[string]string{
+		"/..%2F..%2Fevil.txt": "evil.txt",
+		"/%2E%2E":             "file",
+		"/a%5Cb.txt":          "b.txt",
+		"/x%E2%80%AEtxt.exe":  "xtxt.exe", // U+202E (RLO) stripped
+		"/%0Aname.txt":        "name.txt",
+	}
+	for target, want := range cases {
+		rec := doPut(h, target, "x")
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", target, rec.Code, rec.Body)
+		}
+		u, _ := url.Parse(strings.TrimSpace(rec.Body.String()))
+		parts := strings.Split(strings.TrimPrefix(u.Path, "/files/"), "/")
+		if len(parts) != 2 || !reToken.MatchString(parts[0]) || parts[1] != want {
+			t.Errorf("%s: stored as %q, want <token>/%s", target, u.Path, want)
+		}
+	}
+	entries, _ := os.ReadDir(a.filesDir)
+	if len(entries) != len(cases) {
+		t.Fatalf("files dir has %d entries, want %d token dirs", len(entries), len(cases))
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !reToken.MatchString(e.Name()) {
+			t.Errorf("unexpected entry %q", e.Name())
+		}
+	}
+}
+
+// Without Content-Length (chunked, e.g. curl -T - from a pipe) the size limit
+// is enforced while streaming, and the reserved byte budget is refunded.
+func TestPutChunkedOversizeRefundsBudget(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.UploadMBPerHour = 1; c.MinFreeBytes = 1 })
+	h := a.routes()
+	req := httptest.NewRequest("PUT", "/big.bin", io.MultiReader(strings.NewReader(strings.Repeat("x", int(a.cfg.MaxBytes)+1))))
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", rec.Code)
+	}
+	if entries, _ := os.ReadDir(a.filesDir); len(entries) != 0 {
+		t.Fatalf("files left behind: %v", entries)
+	}
+	if n := a.inFlight.Load(); n != 0 {
+		t.Fatalf("in-flight reservation leaked: %d", n)
+	}
+	// The failed upload used none of the hourly budget, so a full-size one fits.
+	if rec := doPut(h, "/full.bin", strings.Repeat("x", int(a.cfg.MaxBytes))); rec.Code != 200 {
+		t.Fatalf("full-budget upload after refund: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doPut(h, "/more.bin", "x"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("over budget: %d, want 429", rec.Code)
+	}
+}
+
+func TestPutLowDiskRefused(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.MinFreeBytes = 1 << 62 })
+	if _, err := diskFree(a.filesDir); err != nil {
+		t.Skip("diskFree unsupported here")
+	}
+	if rec := doPut(a.routes(), "/a.txt", "x"); rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("low disk: %d, want 507", rec.Code)
+	}
+	if entries, _ := os.ReadDir(a.filesDir); len(entries) != 0 {
+		t.Errorf("file written despite refusal")
+	}
+	if n := a.inFlight.Load(); n != 0 {
+		t.Fatalf("in-flight reservation leaked: %d", n)
+	}
+}
+
+// A client that disconnects mid-body must leave no file and no history entry.
+func TestPutAbortedLeavesNothingBehind(t *testing.T) {
+	a := newTestApp(t, nil)
+	srv := httptest.NewServer(a.routes())
+	defer srv.Close()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(conn, "PUT /cut.bin?uuid=aborted-put-1234 HTTP/1.1\r\nHost: x\r\nContent-Length: 65536\r\n\r\n%s", strings.Repeat("x", 1000))
+	time.Sleep(100 * time.Millisecond) // let the handler start writing
+	conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, _ := os.ReadDir(a.filesDir)
+		if len(entries) == 0 && a.inFlight.Load() == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("left behind after abort: %v", entries)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if h := get(a.routes(), "/api/history?uuid=aborted-put-1234"); strings.Contains(h.Body.String(), "cut.bin") {
+		t.Fatalf("aborted upload listed: %s", h.Body)
+	}
+}
+
+// PUT is not a CORS-simple method, so browsers on other sites must preflight;
+// the preflight must not be granted, or any website could upload as a visitor.
+func TestPutNotAllowedCrossOrigin(t *testing.T) {
+	a := newTestApp(t, nil)
+	req := httptest.NewRequest("OPTIONS", "/a.txt", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Access-Control-Request-Method", "PUT")
+	rec := httptest.NewRecorder()
+	a.routes().ServeHTTP(rec, req)
+	if v := rec.Header().Get("Access-Control-Allow-Origin"); v != "" {
+		t.Fatalf("preflight granted: Access-Control-Allow-Origin %q", v)
+	}
+}
+
+// curl -T sends Expect: 100-continue for larger files; a declared oversize
+// body is refused without consuming any budget.
+func TestPutDeclaredOversizeRefusedUpfront(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.UploadsPerHour = 1 })
+	h := a.routes()
+	req := httptest.NewRequest("PUT", "/big.bin", strings.NewReader("x"))
+	req.ContentLength = a.cfg.MaxBytes + 1
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", rec.Code)
+	}
+	if rec := doPut(h, "/ok.txt", "x"); rec.Code != 200 {
+		t.Fatalf("refused upload counted against rate limit: %d", rec.Code)
 	}
 }

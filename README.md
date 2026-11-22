@@ -8,6 +8,7 @@ Small anonymous file upload service – successor of ul2 (PHP).
 - Files expire after `RETENTION_DAYS` (built-in hourly cleanup, no cron needed)
 - Per-client limits on uploads, history lookups and admin login attempts; uploads pause when the disk runs low
 - Admin page at `/admin` (all uploads, delete, run cleanup now)
+- curl: `curl -T file https://host/` prints the link
 - ShareX: per-user `.sxcu` download on the main page; `POST /upload.php` still works for old configs
 
 **Stack:** one Go binary (stdlib HTTP + pure-Go SQLite, no CGO), vanilla HTML/CSS/JS embedded into it, no build step for the frontend. The Docker image is `FROM scratch`, ~15 MB, runs as uid 65532 with a read-only root fs.
@@ -61,6 +62,7 @@ Old file URLs (`/files/<name>`) keep working if the domain points at ul3. New up
 | | |
 |---|---|
 | `POST /api/upload` | multipart: `file-upload` (any file field works), optional `uuid` → `{success: id, url, filename}` |
+| `PUT /{name}` | raw body is the file (`curl -T`), optional `?uuid=` → file URL as plain text |
 | `GET /api/history?uuid=` | `{files: [...]}` |
 | `POST /api/delete` | JSON `{id, uuid}` |
 | `GET /api/admin/uploads`, `POST /api/admin/delete`, `POST /api/admin/cleanup` | `Authorization: Bearer <password>` |
@@ -69,5 +71,9 @@ Old file URLs (`/files/<name>`) keep working if the domain points at ul3. New up
 | `GET /healthz` | |
 
 ```bash
-curl -F "file-upload=@screenshot.png" https://ul.example.com/api/upload
+curl -T screenshot.png https://ul.example.com/            # prints the URL
+some-command | curl -T - https://ul.example.com/log.txt   # from stdin
+curl -F "file-upload=@screenshot.png" https://ul.example.com/api/upload  # JSON response
 ```
+
+Add `?uuid=<your browser UUID>` to have curl uploads show up in that browser's history.
