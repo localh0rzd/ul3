@@ -23,15 +23,17 @@
 	<main>
 		<section id="upload" class="card dropzone">
 			<h1>Upload<small>Script</small></h1>
+			<div class="upload-actions">
 			<label class="btn btn-primary btn-lg">
 				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l5 5h-3v6h-4V8H7l5-5zm-7 14h14v4H5v-4z"/></svg>
 				Dateien auswählen &amp; hochladen
 				<input type="file" id="file-input" multiple hidden>
 			</label>
-			<button type="button" id="paste-btn" class="btn" hidden>
+			<button type="button" id="paste-btn" class="btn btn-lg" hidden>
 				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h-1.2a3 3 0 0 0-5.6 0H8a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-4-.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2zM16 20H8V5h1v2h6V5h1v15z"/></svg>
 				Aus Zwischenablage einfügen
 			</button>
+			</div>
 			<p class="muted">Oder Dateien hierher ziehen – oder Dateien, Bilder und Text mit <kbd>Strg</kbd>+<kbd>V</kbd> einfügen.</p>
 			<ul id="progress" class="progress-list"></ul>
 		</section>

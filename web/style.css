@@ -76,6 +76,9 @@ h2 { font-size: 1.25rem; margin: 0 0 12px; }
 .section-head h2 { margin: 0; }
 
 .dropzone { text-align: center; padding: 40px 24px; transition: background .15s, border-color .15s; }
+/* Upload + paste buttons: equal columns (width of the wider one), same height. */
+.upload-actions { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; }
+.upload-actions .btn { justify-content: center; }
 .dropzone.dragover, body.dragging .dropzone { border-color: var(--accent); border-style: dashed; }
 
 .btn {
@@ -90,7 +93,6 @@ h2 { font-size: 1.25rem; margin: 0 0 12px; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-lg { padding: 14px 24px; font-size: 1.1rem; border-radius: 10px; }
-#paste-btn { margin: 8px 4px 0; vertical-align: middle; }
 .btn-sm { padding: 3px 9px; font-size: .85rem; }
 .btn-ghost { background: transparent; }
 .btn-danger { color: var(--danger); }
@@ -182,5 +184,6 @@ tr.deleted td { color: var(--muted); }
 	.hide-sm { display: none; }
 	h1 { font-size: 2rem; }
 	.card { padding: 18px; }
+	.upload-actions { display: grid; grid-auto-flow: row; }
 	.topbar { gap: 14px; padding: 0 16px; }
 }
