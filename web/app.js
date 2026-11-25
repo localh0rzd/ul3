@@ -276,13 +276,61 @@ window.addEventListener("drop", (e) => {
 	$("#upload").scrollIntoView();
 });
 
+// Clipboard → File[]: real files/images first; otherwise plain text becomes a .txt file.
+const MIME_EXT = { "text/plain": "txt", "image/jpeg": "jpg", "image/svg+xml": "svg", "text/html": "html" };
+let pasteSeq = 0;
+function pastedFile(blob, type = blob.type) {
+	if (blob.name && blob.name !== "image.png") return blob;
+	const ext = MIME_EXT[type] || (type.split("/")[1] || "bin").split("+")[0].replace(/\W/g, "") || "bin";
+	const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+	return new File([blob], `paste-${stamp}-${++pasteSeq}.${ext}`, { type });
+}
+const textFile = (text) => text && text.trim() ? pastedFile(new Blob([text], { type: "text/plain" })) : null;
+
 window.addEventListener("paste", (e) => {
-	if (e.target.closest?.("input, textarea")) return;
-	const files = [...(e.clipboardData?.items || [])]
-		.filter((i) => i.kind === "file").map((i) => i.getAsFile()).filter(Boolean)
-		.map((f) => (f.name && f.name !== "image.png") ? f : new File([f], `paste-${Date.now()}.${(f.type.split("/")[1] || "bin").replace(/\W/g, "")}`, { type: f.type }));
-	if (files.length) { e.preventDefault(); addFiles(files); }
+	if (e.target.closest?.("input, textarea, [contenteditable]")) return;
+	const dt = e.clipboardData;
+	if (!dt) return;
+	let files = [...dt.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()).filter(Boolean).map((f) => pastedFile(f));
+	if (!files.length) {
+		// Text-only paste: ask first, so a stray Ctrl+V doesn't upload e.g. a password.
+		const text = textFile(dt.getData("text/plain"));
+		if (!text) return;
+		e.preventDefault();
+		if (confirm(`Text aus der Zwischenablage (${fmtSize(text.size)}) als Datei hochladen?`)) addFiles([text]);
+		return;
+	}
+	e.preventDefault();
+	addFiles(files);
 });
+
+const pasteBtn = $("#paste-btn");
+if (navigator.clipboard?.read || navigator.clipboard?.readText) {
+	pasteBtn.hidden = false;
+	pasteBtn.addEventListener("click", async () => {
+		const files = [];
+		try {
+			if (navigator.clipboard.read) {
+				for (const item of await navigator.clipboard.read()) {
+					const type = item.types.find((t) => !t.startsWith("text/")) || (item.types.includes("text/plain") && "text/plain");
+					if (!type) continue;
+					const blob = await item.getType(type);
+					files.push(type === "text/plain" ? textFile(await blob.text()) : pastedFile(blob, type));
+				}
+			} else {
+				files.push(textFile(await navigator.clipboard.readText()));
+			}
+		} catch (err) {
+			// Chrome throws DataError for an empty clipboard or unreadable content (e.g. files copied in a file manager).
+			toast(err?.name === "NotAllowedError" ? "Zugriff auf Zwischenablage verweigert"
+				: err?.name === "DataError" ? "Zwischenablage ist leer – kopierte Dateien bitte mit Strg+V einfügen"
+				: "Zwischenablage konnte nicht gelesen werden");
+			return;
+		}
+		const list = files.filter(Boolean);
+		if (list.length) addFiles(list); else toast("Zwischenablage ist leer");
+	});
+}
 
 $("#refresh").addEventListener("click", loadHistory);
 $("#copy-uuid").addEventListener("click", () => copy(uuid));
