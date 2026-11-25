@@ -181,31 +181,73 @@ func (a *app) clientAddr(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// adminKey is the key for failed admin logins. It is coarser than clientKey
-// for IPv6 (a /48, the usual allocation to one customer), so rotating through
-// a provider's /64s does not multiply the guesses an attacker gets.
-func (a *app) adminKey(r *http.Request) string {
+// netKey is the client IPv4 address, or its IPv6 /48 (the usual allocation to
+// one customer, and free from tunnel brokers). It is the key for failed admin
+// logins, so rotating through /64s does not multiply the guesses an attacker
+// gets, and the second tier of the upload quotas.
+func (a *app) netKey(r *http.Request) string { return a.ipKey(r, 48) }
+
+// clientKey is the rate-limit key: the client IPv4 address, or its IPv6 /64
+// (a single host usually controls a whole /64).
+func (a *app) clientKey(r *http.Request) string { return a.ipKey(r, 64) }
+
+func (a *app) ipKey(r *http.Request, v6bits int) string {
 	ip := clientIP(r, a.cfg.TrustedProxies)
 	if !ip.IsValid() {
 		return r.RemoteAddr
 	}
 	if ip.Is6() {
-		p, _ := ip.Prefix(48)
+		p, _ := ip.Prefix(v6bits)
 		return p.String()
 	}
 	return ip.String()
 }
 
-// clientKey is the rate-limit key: the client IPv4 address, or its IPv6 /64
-// (a single host usually controls a whole /64).
-func (a *app) clientKey(r *http.Request) string {
-	ip := clientIP(r, a.cfg.TrustedProxies)
-	if !ip.IsValid() {
-		return r.RemoteAddr
+// ---------- two-tier quotas ----------
+
+// netShare is how many client budgets one IPv6 /48 gets in total. Per-/64
+// keys keep separate devices on a shared /48 (mobile carriers, campuses)
+// apart, but on their own they would give whoever controls a /48 65,536
+// budgets – enough to fill the disk up to MIN_FREE_MB and block all uploads
+// for the retention period.
+const netShare = 8
+
+// quota is a per-client limit plus, for IPv6 clients, a wider one on their /48.
+// A zero quota allows everything.
+type quota struct{ client, net *limiter }
+
+func newQuota(perHour, burst float64) quota {
+	return quota{newLimiter(perHour, burst), newLimiter(perHour*netShare, burst*netShare)}
+}
+
+// quotaKey names a client for a quota; net is "" when there is no wider
+// network to charge (IPv4).
+type quotaKey struct{ client, net string }
+
+func (a *app) quotaKey(r *http.Request) quotaKey {
+	k := quotaKey{a.clientKey(r), a.netKey(r)}
+	if k.net == k.client {
+		k.net = ""
 	}
-	if ip.Is6() {
-		p, _ := ip.Prefix(64)
-		return p.String()
+	return k
+}
+
+// Take removes n tokens from both tiers, or from neither.
+func (q quota) Take(k quotaKey, n float64) bool {
+	if !q.client.Take(k.client, n) {
+		return false
 	}
-	return ip.String()
+	if k.net != "" && !q.net.Take(k.net, n) {
+		q.client.Refund(k.client, n)
+		return false
+	}
+	return true
+}
+
+// Refund gives back up to n tokens to both tiers.
+func (q quota) Refund(k quotaKey, n float64) {
+	q.client.Refund(k.client, n)
+	if k.net != "" {
+		q.net.Refund(k.net, n)
+	}
 }

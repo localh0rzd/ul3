@@ -85,7 +85,7 @@ function fileRow(f, fresh = false) {
 
 async function loadHistory() {
 	try {
-		const r = await fetch(`/api/history?uuid=${encodeURIComponent(uuid)}`);
+		const r = await fetch("/api/history", { headers: { "X-UUID": uuid } });
 		const data = await r.json();
 		if (!r.ok) throw new Error(data.error);
 		tbody.replaceChildren(...(data.files.length ? data.files.map((f) => fileRow(f)) : [emptyRow()]));

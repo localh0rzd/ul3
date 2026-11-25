@@ -267,6 +267,37 @@ func TestHistoryShowsOriginalName(t *testing.T) {
 }
 
 // MEDIUM finding: unlimited anonymous uploads.
+// LOW finding: the web UI sent the owner UUID – a bearer secret – in the query
+// string, which reverse proxies log. It now goes in X-UUID; ?uuid= still works.
+func TestHistoryUUIDFromHeader(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	const uuid = "0b9a7c1e-1111-4222-8333-777788889999"
+	doUpload(t, h, uuid, "mine.txt", "x")
+	r := get(h, "/api/history", "X-UUID", uuid)
+	if r.Code != 200 || !strings.Contains(r.Body.String(), "mine.txt") {
+		t.Fatalf("header lookup: %d %s", r.Code, r.Body)
+	}
+	if r := get(h, "/api/history?uuid=someone-else-1234", "X-UUID", uuid); !strings.Contains(r.Body.String(), "mine.txt") {
+		t.Fatalf("header must win over the query: %s", r.Body)
+	}
+	if r := get(h, "/api/history", "X-UUID", "bad uuid"); r.Code != http.StatusBadRequest {
+		t.Fatalf("invalid header UUID: %d, want 400", r.Code)
+	}
+}
+
+// INFO finding: "public" let shared caches keep serving deleted uploads.
+func TestUploadsNotStoredBySharedCaches(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	_, up := doUpload(t, h, "", "a.txt", "x")
+	u, _ := url.Parse(up.URL)
+	cc := get(h, u.EscapedPath()).Header().Get("Cache-Control")
+	if !strings.Contains(cc, "private") || strings.Contains(cc, "public") {
+		t.Fatalf("Cache-Control = %q, want private", cc)
+	}
+}
+
 func TestAbortedUploadLeavesNothingBehind(t *testing.T) {
 	a := newTestApp(t, nil)
 	body, ct := multipartBody(t, "aborted-uuid-1234", "big.bin", strings.Repeat("x", 64<<10))
@@ -406,6 +437,63 @@ func TestAdminLockoutCoversIPv6Slash48(t *testing.T) {
 	}
 	if c := try("[2001:db8:8::1]:443", a.cfg.AdminPassword); c != http.StatusOK {
 		t.Fatalf("other /48: %d, want 200", c)
+	}
+}
+
+// MEDIUM finding: upload quotas were keyed per /64 only, so a /48 meant
+// 65,536 budgets. Each /64 keeps its own budget, but a /48 shares netShare.
+func TestUploadQuotaCoversIPv6Slash48(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config)
+	}{
+		{"requests", func(c *config) { c.UploadsPerHour = 1 }},
+		{"bytes", func(c *config) { c.UploadMBPerHour = 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t, tc.mutate)
+			h := a.routes()
+			big := strings.Repeat("x", 1<<20) // one full byte budget
+			put := func(remote string) int {
+				req := httptest.NewRequest("PUT", "/a.bin", strings.NewReader(big))
+				req.RemoteAddr = remote
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				return rec.Code
+			}
+			for i := range netShare {
+				if c := put(fmt.Sprintf("[2001:db8:7:%x::1]:443", i)); c != 200 {
+					t.Fatalf("/64 #%d: %d, want 200", i, c)
+				}
+			}
+			if c := put("[2001:db8:7:ffff::1]:443"); c != http.StatusTooManyRequests {
+				t.Fatalf("/64 beyond the /48's share: %d, want 429", c)
+			}
+			if c := put("[2001:db8:7:0::2]:443"); c != http.StatusTooManyRequests {
+				t.Fatalf("spent /64: %d, want 429", c)
+			}
+			if c := put("[2001:db8:8::1]:443"); c != 200 {
+				t.Fatalf("other /48: %d, want 200", c)
+			}
+		})
+	}
+}
+
+// A /64 refused by its /48 must not lose its own budget: the tiers are
+// charged together or not at all.
+func TestQuotaTakeIsAllOrNothing(t *testing.T) {
+	q := newQuota(1, 1)
+	for i := range netShare {
+		if !q.Take(quotaKey{fmt.Sprintf("c%d", i), "n"}, 1) {
+			t.Fatalf("take %d refused", i)
+		}
+	}
+	k := quotaKey{"fresh", "n"}
+	if q.Take(k, 1) {
+		t.Fatal("take beyond the network share allowed")
+	}
+	if !q.Take(quotaKey{"fresh", "other"}, 1) {
+		t.Fatal("refused take still charged the client tier")
 	}
 }
 

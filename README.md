@@ -63,7 +63,7 @@ Old file URLs (`/files/<name>`) keep working if the domain points at ul3. New up
 |---|---|
 | `POST /api/upload` | multipart: `file-upload` (any file field works), optional `uuid` → `{success: id, url, filename}` |
 | `PUT /{name}` | raw body is the file (`curl -T`), optional `?uuid=` → file URL as plain text |
-| `GET /api/history?uuid=` | `{files: [...]}` |
+| `GET /api/history` | header `X-UUID: <uuid>` (or `?uuid=`, which ends up in proxy access logs) → `{files: [...]}` |
 | `POST /api/delete` | JSON `{id, uuid}` |
 | `GET /api/admin/uploads`, `POST /api/admin/delete`, `POST /api/admin/cleanup` | `Authorization: Bearer <password>` |
 | `GET /files/{token}/{name}` | served with `Content-Security-Policy: sandbox`, so uploaded HTML/SVG can't run script on this origin; JavaScript/CSS uploads are served as `text/plain` so they can't be loaded as scripts or styles |

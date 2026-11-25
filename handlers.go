@@ -32,8 +32,8 @@ type app struct {
 	files    *os.Root
 	filesDir string
 
-	uploads     *limiter // upload requests per client
-	uploadBytes *limiter // uploaded bytes per client
+	uploads     quota    // upload requests per client and IPv6 /48
+	uploadBytes quota    // uploaded bytes per client and IPv6 /48
 	lookups     *limiter // history/delete requests per client (UUID guessing)
 	adminFails  *limiter // failed admin logins per client
 
@@ -45,11 +45,11 @@ type app struct {
 func newApp(cfg config, st *store, files *os.Root, filesDir string) *app {
 	return &app{
 		cfg: cfg, store: st, files: files, filesDir: filesDir,
-		uploads:     newLimiter(float64(cfg.UploadsPerHour), float64(cfg.UploadsPerHour)),
-		uploadBytes: newLimiter(float64(cfg.UploadMBPerHour<<20), float64(cfg.UploadMBPerHour<<20)),
+		uploads:     newQuota(float64(cfg.UploadsPerHour), float64(cfg.UploadsPerHour)),
+		uploadBytes: newQuota(float64(cfg.UploadMBPerHour<<20), float64(cfg.UploadMBPerHour<<20)),
 		lookups:     newLimiter(3600, 120), // 1/s sustained, bursts of 120
 		// 10 tries, then one per 10 minutes, per IPv4 address or IPv6 /48
-		// (adminKey). Deliberately not shared by all clients: that would let
+		// (netKey). Deliberately not shared by all clients: that would let
 		// anyone lock the admin out.
 		adminFails: newLimiter(6, 10),
 	}
@@ -135,7 +135,7 @@ func (a *app) admin(h http.HandlerFunc) http.HandlerFunc {
 			jsonErr(w, http.StatusNotFound, "Admin-Bereich ist deaktiviert")
 			return
 		}
-		key := a.adminKey(r)
+		key := a.netKey(r)
 		if !a.adminFails.Available(key) {
 			jsonErr(w, http.StatusTooManyRequests, "Zu viele Fehlversuche – bitte später erneut versuchen")
 			return
@@ -273,7 +273,7 @@ var errTooLarge = errors.New("too large")
 // deadline. On success the caller must call done with the bytes that stayed
 // on disk (0 on failure) so the unused reservation is refunded.
 func (a *app) beginUpload(w http.ResponseWriter, r *http.Request, fail errFunc) (done func(stored int64), ok bool) {
-	key := a.clientKey(r)
+	key := a.quotaKey(r)
 	// Reserve the largest file this request can carry *before* reading it, so
 	// parallel uploads cannot all pass the byte budget and the disk guard at
 	// once. The unused part is refunded when the upload ends.
@@ -519,7 +519,13 @@ func (a *app) handleHistory(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusTooManyRequests, "Zu viele Anfragen – bitte später erneut versuchen")
 		return
 	}
-	owner := r.URL.Query().Get("uuid")
+	// The UUID lists and deletes the owner's files, so the web UI sends it as a
+	// header: reverse-proxy access logs record query strings. ?uuid= stays for
+	// older clients and scripts.
+	owner := r.Header.Get("X-UUID")
+	if owner == "" {
+		owner = r.URL.Query().Get("uuid")
+	}
 	if !reOwner.MatchString(owner) {
 		jsonErr(w, http.StatusBadRequest, "Ungültige UUID")
 		return
@@ -619,7 +625,8 @@ func (a *app) serveStored(w http.ResponseWriter, r *http.Request, name string) {
 	h := w.Header()
 	// Uploaded content is untrusted: never let it run script on our origin.
 	h.Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
-	h.Set("Cache-Control", "public, max-age=3600")
+	// private: a shared cache (CDN, proxy) would keep serving a deleted upload.
+	h.Set("Cache-Control", "private, max-age=3600")
 	h.Set("Content-Type", uploadContentType(name))
 	http.ServeContent(w, r, name, fi.ModTime(), f)
 }
