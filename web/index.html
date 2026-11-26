@@ -35,6 +35,18 @@
 			</button>
 			</div>
 			<p class="muted">Oder Dateien hierher ziehen – oder Dateien, Bilder und Text mit <kbd>Strg</kbd>+<kbd>V</kbd> einfügen.</p>
+			<div id="paste-preview" class="paste-preview" role="region" aria-labelledby="paste-preview-title" hidden>
+				<div class="paste-preview-head">
+					<h2 id="paste-preview-title">Aus Zwischenablage</h2>
+					<span class="muted" id="paste-preview-summary"></span>
+				</div>
+				<ul class="paste-preview-list" id="paste-preview-list"></ul>
+				<div class="paste-preview-actions">
+					<button type="button" class="btn" id="paste-discard">Verwerfen</button>
+					<button type="button" class="btn btn-primary" id="paste-confirm">Hochladen</button>
+				</div>
+				<p class="muted paste-preview-hint"><kbd>Enter</kbd> hochladen · <kbd>Esc</kbd> verwerfen</p>
+			</div>
 			<ul id="progress" class="progress-list"></ul>
 		</section>
 

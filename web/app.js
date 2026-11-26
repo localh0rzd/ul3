@@ -287,6 +287,101 @@ function pastedFile(blob, type = blob.type) {
 }
 const textFile = (text) => text && text.trim() ? pastedFile(new Blob([text], { type: "text/plain" })) : null;
 
+// ---------- paste preview ----------
+// Pasted images are staged in a preview panel and only uploaded once confirmed,
+// so a stray Ctrl+V (e.g. a screenshot with sensitive content) never goes out unseen.
+
+const isImage = (f) => f.type.startsWith("image/");
+const preview = {
+	box: $("#paste-preview"),
+	list: $("#paste-preview-list"),
+	summary: $("#paste-preview-summary"),
+	confirmBtn: $("#paste-confirm"),
+	items: [], // { file, url, li }
+	returnFocus: null,
+};
+
+function stagePaste(files) {
+	if (!files.some(isImage)) { addFiles(files); return; }
+	if (preview.box.hidden) preview.returnFocus = document.activeElement;
+	for (const file of files) {
+		const url = isImage(file) ? URL.createObjectURL(file) : null;
+		const info = el("span", { class: "info" }, fmtSize(file.size));
+		const thumb = el("div", { class: "thumb" });
+		const tooBig = file.size > cfg.maxBytes;
+		const broken = (msg) => { thumb.classList.add("broken"); thumb.replaceChildren(msg); };
+		if (url) {
+			thumb.append(el("img", {
+				src: url, alt: `Vorschau: ${file.name}`, decoding: "async",
+				onload: (e) => { info.textContent = `${e.target.naturalWidth} × ${e.target.naturalHeight} px · ${info.textContent}`; },
+				onerror: () => broken("Keine Vorschau verfügbar"),
+			}));
+		} else broken("Keine Vorschau verfügbar");
+		if (tooBig) info.textContent += ` – zu groß (max. ${fmtSize(cfg.maxBytes)})`;
+		const entry = { file, url, li: null };
+		entry.li = el("li", { class: tooBig ? "too-big" : "" },
+			thumb,
+			el("div", { class: "meta" },
+				el("span", { class: "name", title: file.name }, file.name),
+				info,
+				el("button", {
+					type: "button", class: "btn btn-ghost btn-sm btn-icon", title: "Entfernen", "aria-label": `${file.name} entfernen`,
+					onclick: () => unstage(entry),
+				}, "✕"),
+			),
+		);
+		preview.items.push(entry);
+		preview.list.append(entry.li);
+	}
+	renderPreview();
+	preview.box.hidden = false;
+	// bring the buttons (bottom of the panel) into view; the image itself may be taller than the viewport
+	preview.confirmBtn.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+	preview.confirmBtn.focus({ preventScroll: true });
+}
+
+function renderPreview() {
+	const n = preview.items.length;
+	const total = preview.items.reduce((s, i) => s + i.file.size, 0);
+	preview.list.classList.toggle("multi", n > 1);
+	preview.summary.textContent = `${n} ${n === 1 ? "Datei" : "Dateien"} · ${fmtSize(total)}`;
+	preview.confirmBtn.textContent = n === 1 ? "Hochladen" : `${n} Dateien hochladen`;
+}
+
+function unstage(entry) {
+	const idx = preview.items.indexOf(entry);
+	if (entry.url) URL.revokeObjectURL(entry.url);
+	entry.li.remove();
+	preview.items.splice(idx, 1);
+	if (!preview.items.length) { closePreview(); return; }
+	renderPreview();
+	// keep keyboard focus inside the panel
+	(preview.items[Math.min(idx, preview.items.length - 1)].li.querySelector("button") || preview.confirmBtn).focus();
+}
+
+function closePreview() {
+	for (const i of preview.items) if (i.url) URL.revokeObjectURL(i.url);
+	preview.items = [];
+	preview.list.replaceChildren();
+	preview.box.hidden = true;
+	const back = preview.returnFocus;
+	preview.returnFocus = null;
+	if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true });
+}
+
+preview.confirmBtn.addEventListener("click", () => {
+	const files = preview.items.map((i) => i.file);
+	closePreview(); // revoking the preview URLs doesn't affect the File objects
+	addFiles(files);
+});
+$("#paste-discard").addEventListener("click", () => { closePreview(); toast("Einfügen verworfen"); });
+window.addEventListener("keydown", (e) => {
+	if (preview.box.hidden || e.isComposing) return;
+	if (e.key === "Escape") { e.preventDefault(); closePreview(); toast("Einfügen verworfen"); }
+	// Enter on a focused button already clicks it; handle it only when nothing specific has focus.
+	else if (e.key === "Enter" && (e.target === document.body || e.target === preview.box)) { e.preventDefault(); preview.confirmBtn.click(); }
+});
+
 window.addEventListener("paste", (e) => {
 	if (e.target.closest?.("input, textarea, [contenteditable]")) return;
 	const dt = e.clipboardData;
@@ -301,7 +396,7 @@ window.addEventListener("paste", (e) => {
 		return;
 	}
 	e.preventDefault();
-	addFiles(files);
+	stagePaste(files);
 });
 
 const pasteBtn = $("#paste-btn");
@@ -328,7 +423,7 @@ if (navigator.clipboard?.read || navigator.clipboard?.readText) {
 			return;
 		}
 		const list = files.filter(Boolean);
-		if (list.length) addFiles(list); else toast("Zwischenablage ist leer");
+		if (list.length) stagePaste(list); else toast("Zwischenablage ist leer");
 	});
 }
 
