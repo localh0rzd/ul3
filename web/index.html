@@ -8,6 +8,7 @@
 	<title>Upload – ul3</title>
 	<link rel="icon" href="/favicon.ico">
 	<link rel="stylesheet" href="/style.css">
+	<script src="/filetypes.js" defer></script>
 	<script src="/app.js" defer></script>
 </head>
 <body>
@@ -90,12 +91,12 @@
 
 	<dialog id="lightbox" class="lightbox" aria-labelledby="lightbox-name">
 		<div class="lightbox-stage" id="lightbox-stage">
-			<img id="lightbox-img" alt="">
 		</div>
 		<div class="lightbox-bar">
 			<span class="name" id="lightbox-name"></span>
 			<span class="info" id="lightbox-info"></span>
 			<button type="button" class="btn btn-sm" id="lightbox-zoom" hidden>Originalgröße</button>
+			<a class="btn btn-sm" id="lightbox-open" target="_blank" rel="noopener" hidden>In neuem Tab öffnen</a>
 			<button type="button" class="btn btn-sm btn-icon" id="lightbox-close" title="Schließen (Esc)" aria-label="Schließen">✕</button>
 		</div>
 	</dialog>

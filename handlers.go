@@ -101,7 +101,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("X-Robots-Tag", "noindex, nofollow")
 		if !strings.HasPrefix(r.URL.Path, "/files/") {
-			h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		}
 		next.ServeHTTP(w, r)
 	})

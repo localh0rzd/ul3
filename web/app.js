@@ -293,26 +293,66 @@ const textFile = (text) => text && text.trim() ? pastedFile(new Blob([text], { t
 const lightbox = {
 	dlg: $("#lightbox"),
 	stage: $("#lightbox-stage"),
-	img: $("#lightbox-img"),
 	zoomBtn: $("#lightbox-zoom"),
+	openLink: $("#lightbox-open"),
+	img: null, // set while an image is shown
 };
+const TEXT_VIEW_MAX = 1 << 20; // show at most 1 MB of text
 
-function openLightbox(src, name, info) {
-	const { dlg, stage, img } = lightbox;
-	stage.classList.remove("actual");
-	img.alt = name;
-	img.src = src;
-	$("#lightbox-name").textContent = name;
-	$("#lightbox-info").textContent = info;
+async function readText(file, max) {
+	const text = await file.slice(0, max).text();
+	return { text, truncated: file.size > max, binary: text.includes("\0") };
+}
+
+function fmtDuration(s) {
+	if (!Number.isFinite(s)) return null;
+	s = Math.round(s);
+	const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
+	return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+function openLightbox(entry) {
+	const { dlg, stage, zoomBtn, openLink } = lightbox;
+	const { file, url, mode } = entry;
+	stage.className = `lightbox-stage mode-${mode}`;
+	stage.replaceChildren();
+	lightbox.img = null;
+	zoomBtn.hidden = true;
+	openLink.hidden = true;
+	let focus = $("#lightbox-close");
+	if (mode === "image") {
+		const img = el("img", { src: url, alt: file.name });
+		lightbox.img = img;
+		stage.append(img);
+		if (img.complete) updateZoomable(); else img.onload = updateZoomable;
+	} else if (mode === "video") {
+		focus = el("video", { src: url, controls: true, autoplay: true, playsInline: true, "aria-label": file.name });
+		stage.append(focus);
+	} else if (mode === "audio") {
+		focus = el("audio", { src: url, controls: true, autoplay: true, "aria-label": file.name });
+		stage.append(el("div", { class: "lightbox-audio" }, fileIcon(entry.type.kind, entry.type.ext), focus));
+	} else if (mode === "pdf") {
+		stage.append(el("iframe", { src: url, title: file.name }));
+		openLink.href = url; // fallback if the embedded viewer is unavailable
+		openLink.hidden = false;
+	} else if (mode === "text") {
+		focus = el("pre", { class: "lightbox-text", tabIndex: 0, "aria-label": file.name }, "Lade…");
+		stage.append(focus);
+		readText(file, TEXT_VIEW_MAX).then(({ text, truncated }) => {
+			focus.textContent = text;
+			if (truncated) focus.append(el("div", { class: "truncated" }, `… gekürzt – angezeigt werden die ersten ${fmtSize(TEXT_VIEW_MAX)}`));
+		});
+	}
+	$("#lightbox-name").textContent = file.name;
+	$("#lightbox-info").textContent = entry.infoText();
 	dlg.showModal();
-	$("#lightbox-close").focus();
-	if (img.complete) updateZoomable(); else img.onload = updateZoomable;
+	focus.focus();
 }
 
 // "Original size" only makes sense when fitting actually shrank the image.
 function updateZoomable() {
 	const { stage, img, zoomBtn } = lightbox;
-	if (!lightbox.dlg.open || stage.classList.contains("actual")) return;
+	if (!img || !lightbox.dlg.open || stage.classList.contains("actual")) return;
 	const zoomable = img.naturalWidth > img.clientWidth + 1 || img.naturalHeight > img.clientHeight + 1;
 	img.classList.toggle("zoomable", zoomable);
 	zoomBtn.hidden = !zoomable;
@@ -321,7 +361,7 @@ function updateZoomable() {
 }
 
 function toggleActualSize() {
-	const { stage, img, zoomBtn } = lightbox;
+	const { stage, zoomBtn } = lightbox;
 	const actual = stage.classList.toggle("actual");
 	zoomBtn.textContent = actual ? "An Fenster anpassen" : "Originalgröße";
 	zoomBtn.setAttribute("aria-pressed", String(actual));
@@ -333,69 +373,133 @@ function toggleActualSize() {
 }
 
 lightbox.stage.addEventListener("click", (e) => {
-	// clicking the image toggles zoom when there is something to zoom; clicking around it closes
-	if (e.target === lightbox.img && (lightbox.img.classList.contains("zoomable") || lightbox.stage.classList.contains("actual"))) toggleActualSize();
-	else lightbox.dlg.close();
+	const { img, stage, dlg } = lightbox;
+	if (img && e.target === img) {
+		// clicking the image toggles zoom when there is something to zoom, else closes
+		if (img.classList.contains("zoomable") || stage.classList.contains("actual")) toggleActualSize(); else dlg.close();
+	} else if (e.target === stage || e.target.classList.contains("lightbox-audio")) dlg.close(); // click beside the content
 });
 lightbox.zoomBtn.addEventListener("click", toggleActualSize);
 $("#lightbox-close").addEventListener("click", () => lightbox.dlg.close());
-lightbox.dlg.addEventListener("close", () => { lightbox.img.removeAttribute("src"); });
+lightbox.dlg.addEventListener("close", () => { lightbox.stage.replaceChildren(); lightbox.img = null; }); // stops playback
 window.addEventListener("resize", updateZoomable);
 
 // ---------- paste preview ----------
-// Pasted images are staged in a preview panel and only uploaded once confirmed,
-// so a stray Ctrl+V (e.g. a screenshot with sensitive content) never goes out unseen.
+// Everything pasted is staged in a preview panel and only uploaded once confirmed,
+// so a stray Ctrl+V (a screenshot, a password, a file) never goes out unseen.
 
-const isImage = (f) => f.type.startsWith("image/");
 const preview = {
 	box: $("#paste-preview"),
 	list: $("#paste-preview-list"),
 	summary: $("#paste-preview-summary"),
 	confirmBtn: $("#paste-confirm"),
-	items: [], // { file, url, li }
+	items: [], // see previewEntry()
 	returnFocus: null,
 };
+const SNIPPET_MAX = 16 << 10;
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>';
+
+function previewEntry(file) {
+	const type = fileKind(file);
+	const tooBig = file.size > cfg.maxBytes;
+	const info = el("span", { class: "info" });
+	const thumb = el("button", { type: "button", class: "thumb", onclick: () => openLightbox(entry) });
+	const entry = {
+		file, type, thumb, url: null, mode: "icon", facts: [], li: null,
+		infoText: () => [...entry.facts, fmtSize(file.size)].join(" · ") + (tooBig ? ` – zu groß (max. ${fmtSize(cfg.maxBytes)})` : ""),
+	};
+	const setFacts = (...facts) => { entry.facts = facts.filter(Boolean); info.textContent = entry.infoText(); };
+	const objectURL = () => (entry.url ||= URL.createObjectURL(file));
+	// Icon tile; also the fallback whenever the browser can't render the content.
+	const showIcon = (...overlay) => {
+		entry.mode = "icon";
+		thumb.className = "thumb icon";
+		thumb.disabled = true;
+		thumb.removeAttribute("title");
+		thumb.removeAttribute("aria-label");
+		thumb.replaceChildren(fileIcon(type.kind, type.ext), ...overlay);
+	};
+	const viewable = (mode, action) => {
+		entry.mode = mode;
+		thumb.disabled = false;
+		thumb.title = action;
+		thumb.setAttribute("aria-label", `${file.name}: ${action}`);
+	};
+	const playOverlay = () => { const s = el("span", { class: "play" }); s.innerHTML = PLAY_ICON; return s; };
+
+	showIcon();
+	setFacts(type.label);
+
+	if (type.kind === "image") {
+		thumb.className = "thumb";
+		thumb.replaceChildren(el("img", {
+			src: objectURL(), alt: "", decoding: "async",
+			onload: (e) => setFacts(`${e.target.naturalWidth} × ${e.target.naturalHeight} px`),
+			onerror: () => showIcon(), // e.g. HEIC, TIFF, PSD
+		}));
+		viewable("image", "Vergrößern");
+	} else if (type.kind === "video" || (type.kind === "audio" && file.type.startsWith("video/"))) {
+		const video = el("video", { muted: true, preload: "metadata", playsInline: true, src: `${objectURL()}#t=0.1` });
+		video.addEventListener("loadedmetadata", () => {
+			if (!video.videoWidth) { // audio-only container
+				showIcon(playOverlay());
+				viewable("audio", "Abspielen");
+				setFacts("Audio", fmtDuration(video.duration));
+				return;
+			}
+			setFacts(`${video.videoWidth} × ${video.videoHeight}`, fmtDuration(video.duration));
+		});
+		video.addEventListener("error", () => showIcon());
+		thumb.className = "thumb media";
+		thumb.replaceChildren(video, playOverlay());
+		viewable("video", "Abspielen");
+	} else if (type.kind === "audio") {
+		const probe = el("audio", { preload: "metadata", src: objectURL() });
+		probe.addEventListener("loadedmetadata", () => {
+			showIcon(playOverlay());
+			viewable("audio", "Abspielen");
+			setFacts(type.label, fmtDuration(probe.duration));
+		}, { once: true });
+	} else if (type.kind === "pdf" && navigator.pdfViewerEnabled !== false) {
+		objectURL();
+		viewable("pdf", "Ansehen");
+	} else if (type.textual && file.size > 0) {
+		readText(file, SNIPPET_MAX).then(({ text, truncated, binary }) => {
+			if (binary || !preview.items.includes(entry)) return;
+			const lines = text.split("\n");
+			if (!truncated) setFacts(type.label, `${lines.length - (lines.at(-1) === "" ? 1 : 0)} Zeilen`);
+			thumb.className = `thumb text ft-${type.kind}`; // colours the extension badge
+			const badge = fileIcon(type.kind, type.ext).querySelector(".ext");
+			thumb.replaceChildren(el("pre", {}, lines.slice(0, 40).join("\n").slice(0, 4000)), ...(badge ? [badge] : []));
+			viewable("text", "Ansehen");
+		});
+	}
+
+	entry.li = el("li", { class: tooBig ? "too-big" : "" },
+		thumb,
+		el("div", { class: "meta" },
+			el("span", { class: "name", title: file.name }, file.name),
+			info,
+			el("button", {
+				type: "button", class: "btn btn-ghost btn-sm btn-icon", title: "Entfernen", "aria-label": `${file.name} entfernen`,
+				onclick: () => unstage(entry),
+			}, "✕"),
+		),
+	);
+	return entry;
+}
 
 function stagePaste(files) {
-	if (!files.some(isImage)) { addFiles(files); return; }
+	if (!files.length) return;
 	if (preview.box.hidden) preview.returnFocus = document.activeElement;
 	for (const file of files) {
-		const url = isImage(file) ? URL.createObjectURL(file) : null;
-		const info = el("span", { class: "info" }, fmtSize(file.size));
-		const thumb = url
-			? el("button", {
-				type: "button", class: "thumb", title: "Vergrößern", "aria-label": `${file.name} vergrößern`,
-				onclick: () => openLightbox(url, file.name, info.textContent),
-			})
-			: el("div", { class: "thumb" });
-		const tooBig = file.size > cfg.maxBytes;
-		const broken = (msg) => { thumb.classList.add("broken"); thumb.disabled = true; thumb.replaceChildren(msg); };
-		if (url) {
-			thumb.append(el("img", {
-				src: url, alt: `Vorschau: ${file.name}`, decoding: "async",
-				onload: (e) => { info.textContent = `${e.target.naturalWidth} × ${e.target.naturalHeight} px · ${info.textContent}`; },
-				onerror: () => broken("Keine Vorschau verfügbar"),
-			}));
-		} else broken("Keine Vorschau verfügbar");
-		if (tooBig) info.textContent += ` – zu groß (max. ${fmtSize(cfg.maxBytes)})`;
-		const entry = { file, url, li: null };
-		entry.li = el("li", { class: tooBig ? "too-big" : "" },
-			thumb,
-			el("div", { class: "meta" },
-				el("span", { class: "name", title: file.name }, file.name),
-				info,
-				el("button", {
-					type: "button", class: "btn btn-ghost btn-sm btn-icon", title: "Entfernen", "aria-label": `${file.name} entfernen`,
-					onclick: () => unstage(entry),
-				}, "✕"),
-			),
-		);
+		const entry = previewEntry(file);
 		preview.items.push(entry);
 		preview.list.append(entry.li);
 	}
 	renderPreview();
 	preview.box.hidden = false;
-	// bring the buttons (bottom of the panel) into view; the image itself may be taller than the viewport
+	// bring the buttons (bottom of the panel) into view; the preview itself may be taller than the viewport
 	preview.confirmBtn.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 	preview.confirmBtn.focus({ preventScroll: true });
 }
@@ -416,7 +520,7 @@ function unstage(entry) {
 	if (!preview.items.length) { closePreview(); return; }
 	renderPreview();
 	// keep keyboard focus inside the panel
-	(preview.items[Math.min(idx, preview.items.length - 1)].li.querySelector("button") || preview.confirmBtn).focus();
+	preview.items[Math.min(idx, preview.items.length - 1)].li.querySelector(".meta button").focus();
 }
 
 function closePreview() {
@@ -449,11 +553,11 @@ window.addEventListener("paste", (e) => {
 	if (!dt) return;
 	let files = [...dt.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()).filter(Boolean).map((f) => pastedFile(f));
 	if (!files.length) {
-		// Text-only paste: ask first, so a stray Ctrl+V doesn't upload e.g. a password.
+		// Text-only paste: staged like everything else, so a stray Ctrl+V doesn't upload e.g. a password.
 		const text = textFile(dt.getData("text/plain"));
 		if (!text) return;
 		e.preventDefault();
-		if (confirm(`Text aus der Zwischenablage (${fmtSize(text.size)}) als Datei hochladen?`)) addFiles([text]);
+		stagePaste([text]);
 		return;
 	}
 	e.preventDefault();

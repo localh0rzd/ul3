@@ -160,7 +160,8 @@ button.thumb:disabled { cursor: default; }
 }
 .lightbox[open] { display: flex; flex-direction: column; }
 .lightbox::backdrop { background: rgb(0 0 0 / .85); }
-.lightbox-stage { flex: 1; min-height: 0; overflow: auto; display: flex; padding: 16px; cursor: zoom-out; }
+.lightbox-stage { flex: 1; min-height: 0; overflow: auto; display: flex; padding: 16px; }
+.lightbox-stage.mode-image { cursor: zoom-out; }
 .lightbox-stage img {
 	margin: auto; /* centers, but stays scrollable when larger than the stage */
 	max-width: 100%; max-height: 100%; object-fit: contain;
@@ -190,6 +191,95 @@ button.thumb:disabled { cursor: default; }
 .paste-preview-list .meta .info { color: var(--muted); font-size: .85rem; white-space: nowrap; }
 .paste-preview-list li.too-big .info { color: var(--danger); }
 .paste-preview-list .btn-icon { padding: 0 7px; line-height: 1.6; }
+
+/* Non-image previews: icon tiles, text snippets, video frames */
+.paste-preview-list .thumb.icon, .paste-preview-list .thumb.text, .paste-preview-list .thumb.media { height: 180px; }
+.paste-preview-list.multi .thumb.icon, .paste-preview-list.multi .thumb.text, .paste-preview-list.multi .thumb.media { height: 140px; }
+.paste-preview-list .thumb.icon { background: var(--bg); position: relative; }
+.paste-preview-list .thumb.media { background: #000; position: relative; }
+.paste-preview-list .thumb.media video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.paste-preview-list .thumb.text { position: relative; place-items: start stretch; background: var(--bg); text-align: left; }
+.paste-preview-list .thumb.text pre {
+	margin: 0; padding: 10px 12px; border: 0; border-radius: 0; background: none;
+	font-size: 11px; line-height: 1.45; color: var(--text); white-space: pre; overflow: hidden; height: 100%;
+	/* fade out at the bottom/right instead of a hard cut */
+	mask-image: linear-gradient(to bottom, #000 70%, transparent), linear-gradient(to right, #000 85%, transparent);
+	mask-composite: intersect;
+}
+.paste-preview-list .thumb.text > .ext { position: absolute; left: auto; right: 8px; bottom: 8px; max-width: 60%; }
+button.thumb.icon:not(:disabled):hover, button.thumb.text:hover { border-color: var(--accent); }
+button.thumb.icon:not(:disabled), button.thumb.media { cursor: pointer; }
+button.thumb.text { cursor: zoom-in; }
+
+.thumb .play {
+	position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+	width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+	background: rgb(0 0 0 / .55); color: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .3);
+	transition: transform .15s, background .15s;
+}
+.thumb.icon .play { width: 32px; height: 32px; top: auto; left: auto; right: 10px; bottom: 10px; transform: none; }
+.thumb .play svg { width: 55%; height: 55%; fill: currentColor; margin-left: 8%; }
+button.thumb:hover .play { background: var(--accent); }
+button.thumb.media:hover .play { transform: translate(-50%, -50%) scale(1.08); }
+@media (prefers-reduced-motion: reduce) { .thumb .play { transition: none; } }
+
+/* File icon: page outline, coloured glyph, extension badge */
+.ficon { --ft: #7a8494; position: relative; display: inline-grid; place-items: center; color: var(--ft); }
+.ficon svg { display: block; width: 64px; height: 77px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ficon .page { fill: color-mix(in srgb, var(--ft) 10%, var(--card)); stroke: color-mix(in srgb, var(--ft) 55%, var(--border)); }
+.ficon .fold { stroke: color-mix(in srgb, var(--ft) 55%, var(--border)); }
+.ficon .glyph { stroke-width: 2; }
+.ficon .ext, .thumb.text > .ext {
+	position: absolute; left: -6px; bottom: 5px;
+	max-width: calc(100% + 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	padding: 1px 6px; border-radius: 4px;
+	background: var(--ft, var(--muted)); color: #fff;
+	font: 700 .68rem/1.5 var(--font); letter-spacing: .03em; text-transform: uppercase;
+}
+.paste-preview-list.multi .ficon svg { width: 52px; height: 62px; }
+.ft-image { --ft: #0f9d8a; }
+.ft-video { --ft: #d6336c; }
+.ft-audio { --ft: #8e44ec; }
+.ft-pdf { --ft: #d93025; }
+.ft-document { --ft: #2b6cd8; }
+.ft-spreadsheet { --ft: #1e8e3e; }
+.ft-presentation { --ft: #e8710a; }
+.ft-archive { --ft: #c58a00; }
+.ft-ebook { --ft: #a0522d; }
+.ft-code { --ft: #5a6acf; }
+.ft-text { --ft: #6b7280; }
+.ft-font { --ft: #b5338a; }
+.ft-package { --ft: #7c5c3b; }
+.ft-executable { --ft: #3d4a5c; }
+.ft-disk { --ft: #546e7a; }
+.ft-file { --ft: #7a8494; }
+@media (prefers-color-scheme: dark) {
+	.ft-executable { --ft: #8b98ab; }
+	.ft-package { --ft: #b08a62; }
+	.ft-text, .ft-file { --ft: #9aa3b2; }
+	.ft-code { --ft: #8c98f0; }
+	.ft-document { --ft: #5b8ff0; }
+	.ft-pdf { --ft: #f06464; }
+}
+
+/* Viewer modes besides images */
+.lightbox-stage video { margin: auto; max-width: 100%; max-height: 100%; background: #000; box-shadow: 0 4px 30px rgb(0 0 0 / .5); }
+.lightbox-stage iframe { flex: 1; width: 100%; border: 0; border-radius: 6px; background: #fff; }
+.lightbox-stage.mode-pdf { padding: 0; }
+.lightbox-stage.mode-pdf iframe { border-radius: 0; }
+.lightbox-audio { margin: auto; display: grid; justify-items: center; gap: 24px; width: min(480px, 100%); }
+.lightbox-audio .ficon svg { width: 120px; height: 144px; }
+.lightbox-audio .ficon .page { fill: rgb(255 255 255 / .08); }
+.lightbox-audio .ficon .ext { display: none; }
+.lightbox-audio audio { width: 100%; }
+.lightbox-text {
+	margin: 0 auto; width: min(1000px, 100%); max-height: 100%; overflow: auto;
+	background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+	padding: 16px 20px; font-size: .85rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4;
+	align-self: flex-start;
+}
+.lightbox-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lightbox-text .truncated { margin-top: 12px; color: var(--muted); font-style: italic; font-family: var(--font); }
 .paste-preview-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .paste-preview-hint { margin: 8px 0 0; font-size: .8rem; text-align: right; }
 @media (hover: none) { .paste-preview-hint { display: none; } }
