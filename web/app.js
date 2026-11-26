@@ -287,6 +287,61 @@ function pastedFile(blob, type = blob.type) {
 }
 const textFile = (text) => text && text.trim() ? pastedFile(new Blob([text], { type: "text/plain" })) : null;
 
+// ---------- lightbox ----------
+// Modal <dialog>: focus trap, Esc to close and focus return come from the browser.
+
+const lightbox = {
+	dlg: $("#lightbox"),
+	stage: $("#lightbox-stage"),
+	img: $("#lightbox-img"),
+	zoomBtn: $("#lightbox-zoom"),
+};
+
+function openLightbox(src, name, info) {
+	const { dlg, stage, img } = lightbox;
+	stage.classList.remove("actual");
+	img.alt = name;
+	img.src = src;
+	$("#lightbox-name").textContent = name;
+	$("#lightbox-info").textContent = info;
+	dlg.showModal();
+	$("#lightbox-close").focus();
+	if (img.complete) updateZoomable(); else img.onload = updateZoomable;
+}
+
+// "Original size" only makes sense when fitting actually shrank the image.
+function updateZoomable() {
+	const { stage, img, zoomBtn } = lightbox;
+	if (!lightbox.dlg.open || stage.classList.contains("actual")) return;
+	const zoomable = img.naturalWidth > img.clientWidth + 1 || img.naturalHeight > img.clientHeight + 1;
+	img.classList.toggle("zoomable", zoomable);
+	zoomBtn.hidden = !zoomable;
+	zoomBtn.textContent = "Originalgröße";
+	zoomBtn.setAttribute("aria-pressed", "false");
+}
+
+function toggleActualSize() {
+	const { stage, img, zoomBtn } = lightbox;
+	const actual = stage.classList.toggle("actual");
+	zoomBtn.textContent = actual ? "An Fenster anpassen" : "Originalgröße";
+	zoomBtn.setAttribute("aria-pressed", String(actual));
+	if (actual) {
+		// start centred on the image
+		stage.scrollLeft = (stage.scrollWidth - stage.clientWidth) / 2;
+		stage.scrollTop = (stage.scrollHeight - stage.clientHeight) / 2;
+	}
+}
+
+lightbox.stage.addEventListener("click", (e) => {
+	// clicking the image toggles zoom when there is something to zoom; clicking around it closes
+	if (e.target === lightbox.img && (lightbox.img.classList.contains("zoomable") || lightbox.stage.classList.contains("actual"))) toggleActualSize();
+	else lightbox.dlg.close();
+});
+lightbox.zoomBtn.addEventListener("click", toggleActualSize);
+$("#lightbox-close").addEventListener("click", () => lightbox.dlg.close());
+lightbox.dlg.addEventListener("close", () => { lightbox.img.removeAttribute("src"); });
+window.addEventListener("resize", updateZoomable);
+
 // ---------- paste preview ----------
 // Pasted images are staged in a preview panel and only uploaded once confirmed,
 // so a stray Ctrl+V (e.g. a screenshot with sensitive content) never goes out unseen.
@@ -307,9 +362,14 @@ function stagePaste(files) {
 	for (const file of files) {
 		const url = isImage(file) ? URL.createObjectURL(file) : null;
 		const info = el("span", { class: "info" }, fmtSize(file.size));
-		const thumb = el("div", { class: "thumb" });
+		const thumb = url
+			? el("button", {
+				type: "button", class: "thumb", title: "Vergrößern", "aria-label": `${file.name} vergrößern`,
+				onclick: () => openLightbox(url, file.name, info.textContent),
+			})
+			: el("div", { class: "thumb" });
 		const tooBig = file.size > cfg.maxBytes;
-		const broken = (msg) => { thumb.classList.add("broken"); thumb.replaceChildren(msg); };
+		const broken = (msg) => { thumb.classList.add("broken"); thumb.disabled = true; thumb.replaceChildren(msg); };
 		if (url) {
 			thumb.append(el("img", {
 				src: url, alt: `Vorschau: ${file.name}`, decoding: "async",
@@ -376,7 +436,8 @@ preview.confirmBtn.addEventListener("click", () => {
 });
 $("#paste-discard").addEventListener("click", () => { closePreview(); toast("Einfügen verworfen"); });
 window.addEventListener("keydown", (e) => {
-	if (preview.box.hidden || e.isComposing) return;
+	// Esc inside the lightbox only closes the lightbox (native <dialog> behaviour), not the paste preview.
+	if (preview.box.hidden || lightbox.dlg.open || e.isComposing) return;
 	if (e.key === "Escape") { e.preventDefault(); closePreview(); toast("Einfügen verworfen"); }
 	// Enter on a focused button already clicks it; handle it only when nothing specific has focus.
 	else if (e.key === "Enter" && (e.target === document.body || e.target === preview.box)) { e.preventDefault(); preview.confirmBtn.click(); }

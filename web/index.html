@@ -88,6 +88,18 @@
 
 	<footer><a href="/admin" id="admin-link" hidden>Admin</a></footer>
 
+	<dialog id="lightbox" class="lightbox" aria-labelledby="lightbox-name">
+		<div class="lightbox-stage" id="lightbox-stage">
+			<img id="lightbox-img" alt="">
+		</div>
+		<div class="lightbox-bar">
+			<span class="name" id="lightbox-name"></span>
+			<span class="info" id="lightbox-info"></span>
+			<button type="button" class="btn btn-sm" id="lightbox-zoom" hidden>Originalgröße</button>
+			<button type="button" class="btn btn-sm btn-icon" id="lightbox-close" title="Schließen (Esc)" aria-label="Schließen">✕</button>
+		</div>
+	</dialog>
+
 	<div id="drop-overlay" hidden><div>Dateien loslassen zum Hochladen</div></div>
 	<div id="toast" role="status" aria-live="polite"></div>
 </body>
