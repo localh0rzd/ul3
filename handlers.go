@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -77,6 +75,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /{name}", a.handlePut)         // curl -T file https://host/
 	mux.HandleFunc("GET /api/history", a.handleHistory)
 	mux.HandleFunc("POST /api/delete", a.handleDelete)
+	mux.HandleFunc("POST /api/admin/login", a.handleAdminLogin)
+	mux.HandleFunc("POST /api/admin/logout", a.handleAdminLogout)
 	mux.HandleFunc("GET /api/admin/uploads", a.admin(a.handleAdminList))
 	mux.HandleFunc("POST /api/admin/delete", a.admin(a.handleAdminDelete))
 	mux.HandleFunc("POST /api/admin/cleanup", a.admin(a.handleAdminCleanup))
@@ -135,20 +135,9 @@ func (a *app) admin(h http.HandlerFunc) http.HandlerFunc {
 			jsonErr(w, http.StatusNotFound, "Admin-Bereich ist deaktiviert")
 			return
 		}
-		key := a.netKey(r)
-		if !a.adminFails.Available(key) {
-			jsonErr(w, http.StatusTooManyRequests, "Zu viele Fehlversuche – bitte später erneut versuchen")
-			return
+		if a.adminAuth(w, r) {
+			h(w, r)
 		}
-		got := sha256.Sum256([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")))
-		want := sha256.Sum256([]byte(a.cfg.AdminPassword))
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			a.adminFails.Charge(key, 1)
-			slog.Warn("admin auth failed", "client", a.clientAddr(r))
-			jsonErr(w, http.StatusUnauthorized, "Zugriff verweigert")
-			return
-		}
-		h(w, r)
 	}
 }
 
@@ -347,7 +336,16 @@ func (a *app) recordUpload(w http.ResponseWriter, r *http.Request, fail errFunc,
 
 // handleUpload streams a single multipart file straight to disk.
 // Response shape is compatible with ul2: {success: id, url, filename}.
+// uploadCSRF stops other websites from making their visitors' browsers upload
+// here (each visitor would bring a fresh per-IP quota). ShareX and curl send
+// neither Origin nor Sec-Fetch-Site, so they pass.
+var uploadCSRF = http.NewCrossOriginProtection()
+
 func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if err := uploadCSRF.Check(r); err != nil {
+		jsonErr(w, http.StatusForbidden, "Anfrage von fremder Seite abgelehnt")
+		return
+	}
 	done, ok := a.beginUpload(w, r, jsonErr)
 	if !ok {
 		return
@@ -627,7 +625,20 @@ func (a *app) serveStored(w http.ResponseWriter, r *http.Request, name string) {
 	h.Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
 	// private: a shared cache (CDN, proxy) would keep serving a deleted upload.
 	h.Set("Cache-Control", "private, max-age=3600")
-	h.Set("Content-Type", uploadContentType(name))
+	ct := uploadContentType(name)
+	if mediaType(name) != "" {
+		// The same URL answers a navigation with the player page and the
+		// player's own request with the file, so caches must keep them apart.
+		h.Add("Vary", "Sec-Fetch-Dest")
+		if wantsPlayerPage(r) && !r.URL.Query().Has("dl") {
+			a.servePlayer(w, r, name, ct, fi.Size())
+			return
+		}
+	}
+	if r.URL.Query().Has("dl") || alwaysDownload(ct) {
+		attachment(w, name)
+	}
+	h.Set("Content-Type", ct)
 	http.ServeContent(w, r, name, fi.ModTime(), f)
 }
 
@@ -645,7 +656,18 @@ var scriptOrStyleTypes = map[string]bool{
 	"text/css": true,
 }
 
+// alwaysDownload reports whether a type is never shown inline. HTML uploads
+// can't run script (sandbox CSP), but a static page under our domain is still
+// a ready-made phishing page, so browsers get it as a download instead.
+func alwaysDownload(ct string) bool {
+	essence, _, _ := mime.ParseMediaType(ct)
+	return essence == "text/html" || essence == "application/xhtml+xml"
+}
+
 func uploadContentType(name string) string {
+	if ct := mediaType(name); ct != "" {
+		return ct
+	}
 	ct := mime.TypeByExtension(path.Ext(name))
 	if ct == "" {
 		return "application/octet-stream"

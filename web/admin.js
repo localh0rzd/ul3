@@ -1,7 +1,6 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-let pw = sessionStorage.getItem("ul3-admin") || "";
 
 function el(tag, props = {}, ...children) {
 	const e = document.createElement(tag);
@@ -32,11 +31,11 @@ function toast(msg) {
 async function api(path, body) {
 	const r = await fetch(path, {
 		method: body ? "POST" : "GET",
-		headers: { Authorization: `Bearer ${pw}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+		headers: body ? { "Content-Type": "application/json" } : {},
 		body: body ? JSON.stringify(body) : undefined,
 	});
 	const data = await r.json().catch(() => ({}));
-	if (r.status === 401) { logout(); throw new Error(data.error || "Zugriff verweigert"); }
+	if (r.status === 401 && path !== "/api/admin/login") { showLogin(); throw new Error(data.error || "Nicht angemeldet"); }
 	if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
 	return data;
 }
@@ -80,16 +79,24 @@ async function load() {
 	}));
 }
 
-function logout() {
-	pw = ""; sessionStorage.removeItem("ul3-admin");
+function showLogin() {
 	$("#panel").hidden = true; $("#login-card").hidden = false;
+}
+
+async function logout() {
+	try { await api("/api/admin/logout", {}); } catch {}
+	showLogin();
 }
 
 $("#login").addEventListener("submit", async (e) => {
 	e.preventDefault();
-	pw = $("#pw").value;
 	$("#login-msg").textContent = "Prüfe…";
-	try { await load(); sessionStorage.setItem("ul3-admin", pw); $("#login-msg").textContent = ""; }
+	try {
+		await api("/api/admin/login", { password: $("#pw").value });
+		$("#pw").value = "";
+		await load();
+		$("#login-msg").textContent = "";
+	}
 	catch (err) { $("#login-msg").textContent = err.message; }
 });
 $("#logout").addEventListener("click", logout);
@@ -98,4 +105,5 @@ $("#cleanup").addEventListener("click", async () => {
 	catch (err) { toast(err.message); }
 });
 
-if (pw) load().catch(() => {});
+try { sessionStorage.removeItem("ul3-admin"); } catch {} // password kept there by older versions
+load().catch(() => {}); // signed in already if the session cookie is still valid

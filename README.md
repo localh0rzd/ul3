@@ -65,8 +65,9 @@ Old file URLs (`/files/<name>`) keep working if the domain points at ul3. New up
 | `PUT /{name}` | raw body is the file (`curl -T`), optional `?uuid=` → file URL as plain text |
 | `GET /api/history` | header `X-UUID: <uuid>` (or `?uuid=`, which ends up in proxy access logs) → `{files: [...]}` |
 | `POST /api/delete` | JSON `{id, uuid}` |
-| `GET /api/admin/uploads`, `POST /api/admin/delete`, `POST /api/admin/cleanup` | `Authorization: Bearer <password>` |
-| `GET /files/{token}/{name}` | served with `Content-Security-Policy: sandbox`, so uploaded HTML/SVG can't run script on this origin; JavaScript/CSS uploads are served as `text/plain` so they can't be loaded as scripts or styles |
+| `GET /api/admin/uploads`, `POST /api/admin/delete`, `POST /api/admin/cleanup` | `Authorization: Bearer <password>` or the session cookie |
+| `POST /api/admin/login` `{"password": "…"}`, `POST /api/admin/logout` | Sets / clears the admin session cookie (30 days, HttpOnly, SameSite=Strict; changing the password signs all sessions out) |
+| `GET /files/{token}/{name}` | served with `Content-Security-Policy: sandbox`, so uploaded SVG can't run script on this origin; HTML is always sent as a download (`Content-Disposition: attachment`); JavaScript/CSS uploads are served as `text/plain` so they can't be loaded as scripts or styles |
 | `GET /files/{name}` | legacy ul2 links |
 | `GET /healthz` | |
 

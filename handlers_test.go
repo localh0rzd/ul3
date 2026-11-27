@@ -914,3 +914,201 @@ func TestPutDeclaredOversizeRefusedUpfront(t *testing.T) {
 		t.Fatalf("refused upload counted against rate limit: %d", rec.Code)
 	}
 }
+
+func TestMediaNavigationGetsPlayerPage(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	_, res := doUpload(t, h, "", `clip "<b>".mp4`, "videobytes")
+	u, _ := url.Parse(res.URL)
+	p := u.EscapedPath()
+
+	page := get(h, p, "Sec-Fetch-Dest", "document")
+	body := page.Body.String()
+	if page.Code != 200 || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("player page: %d %q", page.Code, page.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(body, "<video") || !strings.Contains(body, "?dl") || strings.Contains(body, "<b>") {
+		t.Fatalf("player page body: %s", body)
+	}
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'none';") || strings.Contains(csp, "script") {
+		t.Errorf("player CSP %q", csp)
+	}
+	if page.Header().Get("Vary") != "Sec-Fetch-Dest" {
+		t.Errorf("missing Vary")
+	}
+
+	// The <video> element, curl/ShareX and ?raw get the bytes.
+	for _, r := range []*httptest.ResponseRecorder{
+		get(h, p, "Sec-Fetch-Dest", "video"),
+		get(h, p),
+		get(h, p+"?raw", "Sec-Fetch-Dest", "document"),
+	} {
+		if r.Body.String() != "videobytes" || r.Header().Get("Content-Type") != "video/mp4" || r.Header().Get("Content-Disposition") != "" {
+			t.Errorf("raw: %q %q", r.Header().Get("Content-Type"), r.Body)
+		}
+	}
+
+	dl := get(h, p+"?dl", "Sec-Fetch-Dest", "document")
+	if dl.Body.String() != "videobytes" || !strings.HasPrefix(dl.Header().Get("Content-Disposition"), "attachment;") {
+		t.Errorf("download: %q %q", dl.Header().Get("Content-Disposition"), dl.Body)
+	}
+
+	// Audio gets an <audio> player; non-media files are unaffected.
+	_, res = doUpload(t, h, "", "song.MP3", "x")
+	u, _ = url.Parse(res.URL)
+	if r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document"); !strings.Contains(r.Body.String(), "<audio") {
+		t.Errorf("audio page: %s", r.Body)
+	}
+	_, res = doUpload(t, h, "", "a.png", "png")
+	u, _ = url.Parse(res.URL)
+	if r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document"); r.Body.String() != "png" || r.Header().Get("Vary") != "" {
+		t.Errorf("png: %q", r.Body)
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1,5 KB", 5 << 20: "5,0 MB"} {
+		if got := humanSize(n); got != want {
+			t.Errorf("humanSize(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func adminReq(method, target, body string, hdr ...string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	return req
+}
+
+func TestAdminSessionCookie(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	serve := func(req *http.Request) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if r := serve(adminReq("POST", "/api/admin/login", `{"password":"wrong"}`)); r.Code != 401 || len(r.Result().Cookies()) != 0 {
+		t.Fatalf("wrong password: %d %v", r.Code, r.Result().Cookies())
+	}
+	login := serve(adminReq("POST", "/api/admin/login", `{"password":"`+a.cfg.AdminPassword+`"}`))
+	cs := login.Result().Cookies()
+	if login.Code != 200 || len(cs) != 1 {
+		t.Fatalf("login: %d %v", login.Code, cs)
+	}
+	c := cs[0]
+	if c.Name != adminCookie || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/api/admin" || c.MaxAge < 7*86400 {
+		t.Fatalf("cookie attributes: %+v", c)
+	}
+
+	withCookie := func(req *http.Request) *http.Request { req.AddCookie(c); return req }
+	if r := serve(withCookie(adminReq("GET", "/api/admin/uploads", ""))); r.Code != 200 {
+		t.Fatalf("list with cookie: %d", r.Code)
+	}
+	if r := serve(withCookie(adminReq("POST", "/api/admin/cleanup", "{}", "Sec-Fetch-Site", "same-origin"))); r.Code != 200 {
+		t.Fatalf("same-origin cleanup: %d %s", r.Code, r.Body)
+	}
+	// CSRF: another site's form/fetch carries the cookie but must be refused.
+	if r := serve(withCookie(adminReq("POST", "/api/admin/cleanup", "{}", "Sec-Fetch-Site", "cross-site"))); r.Code != 403 {
+		t.Fatalf("cross-site cleanup: %d", r.Code)
+	}
+
+	// Tampered, expired or old-password cookies are rejected without
+	// counting toward the lockout.
+	now := time.Now()
+	for name, v := range map[string]string{
+		"tampered": "9" + c.Value,
+		"expired":  a.newSession(now.Add(-adminSessionTTL - time.Minute)),
+		"garbage":  "x",
+	} {
+		req := adminReq("GET", "/api/admin/uploads", "")
+		req.AddCookie(&http.Cookie{Name: adminCookie, Value: v})
+		if r := serve(req); r.Code != 401 {
+			t.Errorf("%s cookie: %d", name, r.Code)
+		}
+	}
+	old := a.newSession(now)
+	a.cfg.AdminPassword = "a different password, 32+ chars"
+	if a.validSession(old, now) {
+		t.Errorf("session survived password change")
+	}
+	for range 20 {
+		req := adminReq("GET", "/api/admin/uploads", "")
+		req.AddCookie(&http.Cookie{Name: adminCookie, Value: "x.y"})
+		serve(req)
+	}
+	if r := serve(adminReq("GET", "/api/admin/uploads", "", "Authorization", "Bearer "+a.cfg.AdminPassword)); r.Code != 200 {
+		t.Fatalf("bad cookies locked the admin out: %d", r.Code)
+	}
+
+	out := serve(adminReq("POST", "/api/admin/logout", "{}"))
+	if cs := out.Result().Cookies(); len(cs) != 1 || cs[0].MaxAge >= 0 {
+		t.Fatalf("logout did not clear cookie: %v", cs)
+	}
+}
+
+// MEDIUM finding: any website could make its visitors' browsers upload here,
+// each with its own per-IP quota. Cross-site uploads are now refused before
+// any quota is charged; the web UI (same-origin) and ShareX/curl (no
+// browser headers) still work.
+func TestCrossSiteUploadRefused(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	post := func(path string, hdr ...string) *httptest.ResponseRecorder {
+		body, ct := multipartBody(t, "", "x.txt", "x")
+		req := httptest.NewRequest("POST", path, body)
+		req.Header.Set("Content-Type", ct)
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, p := range []string{"/api/upload", "/upload.php"} {
+		if r := post(p, "Sec-Fetch-Site", "cross-site", "Origin", "https://evil.example"); r.Code != http.StatusForbidden {
+			t.Fatalf("%s cross-site: got %d, want 403", p, r.Code)
+		}
+		if r := post(p, "Origin", "https://evil.example"); r.Code != http.StatusForbidden {
+			t.Fatalf("%s foreign Origin without Sec-Fetch-Site: got %d, want 403", p, r.Code)
+		}
+		if r := post(p, "Sec-Fetch-Site", "same-origin", "Origin", "http://example.com"); r.Code != http.StatusOK {
+			t.Fatalf("%s same-origin: got %d %s", p, r.Code, r.Body)
+		}
+		if r := post(p); r.Code != http.StatusOK { // ShareX / curl
+			t.Fatalf("%s without browser headers: got %d %s", p, r.Code, r.Body)
+		}
+	}
+}
+
+// HTML uploads are always downloaded, never rendered on our domain, so they
+// can't serve as a phishing page. Other types still open inline.
+func TestHTMLUploadsAlwaysDownloaded(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	for _, name := range []string{"page.html", "PAGE.HTM"} {
+		rec, res := doUpload(t, h, "", name, "<h1>hi</h1>")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("upload %s: %d %s", name, rec.Code, rec.Body)
+		}
+		u, _ := url.Parse(res.URL)
+		r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+		if cd := r.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+			t.Fatalf("%s: Content-Disposition %q, want attachment", name, cd)
+		}
+	}
+	rec, res := doUpload(t, h, "", "note.txt", "hi")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload txt: %d", rec.Code)
+	}
+	u, _ := url.Parse(res.URL)
+	if cd := get(h, u.EscapedPath()).Header().Get("Content-Disposition"); cd != "" {
+		t.Fatalf("txt: Content-Disposition %q, want inline", cd)
+	}
+}
