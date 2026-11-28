@@ -307,6 +307,8 @@ th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: 
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 tbody tr:last-child td { border-bottom: none; }
 td.fname { word-break: break-all; }
+/* History: date, size and actions shrink to their content so the filename gets the rest. */
+#history th:not(:first-child), #history td:not(:first-child) { width: 1%; white-space: nowrap; }
 td.fname a.gone { color: var(--muted); text-decoration: line-through; pointer-events: none; }
 .num { text-align: right; white-space: nowrap; }
 td .actions { display: inline-flex; gap: 4px; }
