@@ -126,8 +126,9 @@ navigator.clipboard.write([new ClipboardItem({"text/plain":p})]).then(function()
 return}
 legacy().then(done,function(){done(false)})})}
 var v=document.querySelectorAll("[data-view]");
-for(var i=0;i<v.length;i++)v[i].addEventListener("click",function(){
-for(var j=0;j<v.length;j++){var on=v[j]===this;v[j].setAttribute("aria-pressed",on);document.getElementById(v[j].dataset.view).hidden=!on}})
+function show(){for(var j=0;j<v.length;j++)document.getElementById(v[j].dataset.view).hidden=!v[j].checked}
+for(var i=0;i<v.length;i++)v[i].addEventListener("change",show);
+if(v.length)show()
 })();`
 
 var viewerCSP = "default-src 'none'; script-src 'sha256-" + scriptHash(viewerScript) + "'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -161,7 +162,16 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; background: var(--card); 
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn.sq { display: inline-flex; padding: 4px 7px; }
 .btn svg { width: 1.25em; height: 1.25em; margin: .125em 0; fill: currentColor; } /* as tall as a text line */
-.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* segmented control: two radios, a thumb slides under the selected one */
+.seg { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: .9em; }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.seg label { position: relative; z-index: 1; padding: 2px 10px; border-radius: 6px; text-align: center; color: var(--muted); cursor: pointer; user-select: none; -webkit-user-select: none; transition: color .2s; }
+.seg label:hover { color: var(--text); }
+.seg input:checked + label { color: #fff; }
+.seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg .thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc(50% - 2px); border-radius: 6px; background: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .2s ease; }
+.seg input:nth-of-type(2):checked ~ .thumb { transform: translateX(100%); }
+@media (prefers-reduced-motion: reduce) { .seg .thumb, .seg label { transition: none; } }
 /* tooltip under the buttons, so showing it never shifts the layout */
 #msg { position: absolute; top: calc(100% + 6px); right: 0; z-index: 1; white-space: nowrap; pointer-events: none; padding: 4px 10px; border-radius: 6px; font-size: .85em; background: var(--text); color: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,.2); }
 #msg:empty { display: none; }
@@ -201,8 +211,8 @@ td.n::before { content: counter(r); }
 <span class="name" title="{{.Name}}">{{.Name}}</span>
 <span class="meta">{{.Size}}{{if .Lines}} · {{.Lines}} {{if eq .Lines "1"}}Zeile{{else}}Zeilen{{end}}{{end}}</span>
 <span class="btns">
-{{if .Rendered}}<button type="button" class="btn" data-view="md" aria-pressed="true">Gerendert</button><button type="button" class="btn" data-view="txt" aria-pressed="false">Quelltext</button>{{end}}
-{{if .Table}}<button type="button" class="btn" data-view="tbl" aria-pressed="true">Tabelle</button><button type="button" class="btn" data-view="txt" aria-pressed="false">Text</button>{{end}}
+{{if .Rendered}}<span class="seg" role="radiogroup" aria-label="Ansicht"><input type="radio" name="view" id="v1" data-view="md" checked><label for="v1">Gerendert</label><input type="radio" name="view" id="v2" data-view="txt"><label for="v2">Quelltext</label><span class="thumb" aria-hidden="true"></span></span>{{end}}
+{{if .Table}}<span class="seg" role="radiogroup" aria-label="Ansicht"><input type="radio" name="view" id="v1" data-view="tbl" checked><label for="v1">Tabelle</label><input type="radio" name="view" id="v2" data-view="txt"><label for="v2">Text</label><span class="thumb" aria-hidden="true"></span></span>{{end}}
 <a class="btn" href="{{.Raw}}">Raw</a>
 {{if .CanCopy}}<button type="button" class="btn sq" id="copy" data-src="{{.Raw}}" title="Kopieren" aria-label="Kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg></button>{{end}}
 <a class="btn sq" href="{{.Download}}" download="{{.Name}}" title="Herunterladen" aria-label="Herunterladen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3V3zM5 18h14v3H5v-3z"/></svg></a>
