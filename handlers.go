@@ -648,6 +648,20 @@ func (a *app) serveStored(w http.ResponseWriter, r *http.Request, name string) {
 			return
 		}
 	}
+	if isTextFile(name) {
+		h.Add("Vary", "Sec-Fetch-Dest")
+		if wantsPlayerPage(r) && !r.URL.Query().Has("dl") {
+			if a.serveViewer(w, r, name, f, fi.Size()) {
+				return
+			}
+			// Not text after all: offer it as a download instead.
+			attachment(w, name)
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				http.Error(w, "Lesefehler", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	if r.URL.Query().Has("dl") || alwaysDownload(ct) {
 		attachment(w, name)
 	}
@@ -680,7 +694,7 @@ func alwaysDownload(ct string) bool {
 // opensInline reports whether a browser shows the stored file in the page when
 // its link is opened, i.e. serveStored sends it without Content-Disposition.
 func opensInline(name string) bool {
-	if mediaType(name) != "" {
+	if mediaType(name) != "" || isTextFile(name) {
 		return true
 	}
 	ct := uploadContentType(name)
@@ -691,6 +705,13 @@ func opensInline(name string) bool {
 func uploadContentType(name string) string {
 	if ct := mediaType(name); ct != "" {
 		return ct
+	}
+	if isTextFile(name) {
+		// Safe under the sandbox CSP and nosniff; keeps JSON usable for curl/fetch.
+		if e := strings.ToLower(path.Ext(name)); e == ".json" || e == ".jsonc" {
+			return "application/json"
+		}
+		return "text/plain; charset=utf-8"
 	}
 	ct := mime.TypeByExtension(path.Ext(name))
 	if ct == "" {

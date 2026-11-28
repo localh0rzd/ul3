@@ -944,7 +944,7 @@ func TestMediaNavigationGetsPlayerPage(t *testing.T) {
 	if csp := page.Header().Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'none';") || strings.Contains(csp, "script") {
 		t.Errorf("player CSP %q", csp)
 	}
-	if page.Header().Get("Vary") != "Sec-Fetch-Dest" {
+	if !strings.Contains(page.Header().Get("Vary"), "Sec-Fetch-Dest") {
 		t.Errorf("missing Vary")
 	}
 
@@ -1214,5 +1214,256 @@ func TestShareFallbackStoresNothing(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(a.filesDir); len(entries) != 0 {
 		t.Fatalf("files written: %d", len(entries))
+	}
+}
+
+func TestTextFilesGetViewerPage(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.MaxBytes = 8 << 20 })
+	h := a.routes()
+	_, res := doUpload(t, h, "", `n "<b>".txt`, "line1\r\n<script>alert(1)</script>\nline3\n")
+	u, _ := url.Parse(res.URL)
+	p := u.EscapedPath()
+
+	page := get(h, p, "Sec-Fetch-Dest", "document")
+	body := page.Body.String()
+	if page.Code != 200 || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("viewer: %d %q", page.Code, page.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(body, "3 Zeilen") || !strings.Contains(body, "?raw") || !strings.Contains(body, "?dl") ||
+		!strings.Contains(body, "&lt;script&gt;alert(1)") || strings.Contains(body, "<b>") || strings.Contains(body, "<script>alert") {
+		t.Fatalf("viewer body: %s", body)
+	}
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'none';") ||
+		!strings.Contains(csp, "script-src 'sha256-"+scriptHash(inlineScript(t, body))+"'") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("viewer CSP %q", csp)
+	}
+	if !strings.Contains(page.Header().Get("Vary"), "Sec-Fetch-Dest") || page.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("headers: %v", page.Header())
+	}
+
+	// ?raw, curl and fetch get the exact bytes as text/plain.
+	for _, r := range []*httptest.ResponseRecorder{
+		get(h, p+"?raw", "Sec-Fetch-Dest", "document"),
+		get(h, p),
+		get(h, p, "Sec-Fetch-Dest", "empty"),
+	} {
+		if r.Body.String() != "line1\r\n<script>alert(1)</script>\nline3\n" || r.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+			r.Header().Get("Content-Disposition") != "" || !strings.HasPrefix(r.Header().Get("Content-Security-Policy"), "sandbox") {
+			t.Errorf("raw: %q %q %q", r.Header().Get("Content-Type"), r.Header().Get("Content-Security-Policy"), r.Body)
+		}
+	}
+	dl := get(h, p+"?dl", "Sec-Fetch-Dest", "document")
+	if !strings.HasPrefix(dl.Header().Get("Content-Disposition"), "attachment") || strings.Contains(dl.Body.String(), "<html") {
+		t.Errorf("dl: %q", dl.Header().Get("Content-Disposition"))
+	}
+
+	// Binary content under a text name falls back to a download.
+	for name, content := range map[string]string{"nul.txt": "a\x00b", "latin.log": "caf\xe9"} {
+		_, res := doUpload(t, h, "", name, content)
+		u, _ := url.Parse(res.URL)
+		r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+		if r.Body.String() != content || !strings.HasPrefix(r.Header().Get("Content-Disposition"), "attachment") {
+			t.Errorf("%s: %q %q", name, r.Header().Get("Content-Disposition"), r.Body)
+		}
+	}
+
+	// Large files show only the beginning; the buttons stay.
+	_, res = doUpload(t, h, "", "big.log", strings.Repeat("0123456789abcdef\n", 70000))
+	u, _ = url.Parse(res.URL)
+	r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+	if r.Code != 200 || !strings.Contains(r.Body.String(), "Große Datei") || !strings.Contains(r.Body.String(), "?dl") || r.Body.Len() > 2<<20 {
+		t.Errorf("oversize: %d %d", r.Code, r.Body.Len())
+	}
+
+	// HTML never gets a viewer.
+	_, res = doUpload(t, h, "", "page.html", "<h1>x</h1>")
+	u, _ = url.Parse(res.URL)
+	r = get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+	if !strings.HasPrefix(r.Header().Get("Content-Disposition"), "attachment") || r.Body.String() != "<h1>x</h1>" {
+		t.Errorf("html: %q", r.Header().Get("Content-Disposition"))
+	}
+	if opensInline("page.html") || !opensInline("a.csv") || !opensInline("Makefile") || opensInline("x.unknwn") {
+		t.Errorf("opensInline mismatch")
+	}
+}
+
+func TestCSVViewerTable(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	_, res := doUpload(t, h, "", "d.csv", "name,note\n\"Mu, \"\"M\"\"\",\"two\nlines\"\n<i>,x\n")
+	u, _ := url.Parse(res.URL)
+	body := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document").Body.String()
+	for _, want := range []string{"<th>name</th>", "<td>Mu, &#34;M&#34;</td>", "<td>two\nlines</td>", "<td>&lt;i&gt;</td>", `data-view="tbl"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in %s", want, body)
+		}
+	}
+}
+
+func TestMarkdownViewerIsSafe(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	md := "# Title\n\n| a | b |\n|---|---|\n| 1 | ~~2~~ |\n\n- [x] done\n\nhttps://example.com/auto\n\n" +
+		"<script>alert(1)</script>\n\n<img src=x onerror=alert(2)>\n\n<iframe src=\"https://evil.example\"></iframe>\n\n" +
+		"[x](javascript:alert(3)) [y](JaVaScRiPt:alert(4)) [z](data:text/html;base64,PHNjcmlwdD4=)\n\n![i](javascript:alert(5))\n"
+	_, res := doUpload(t, h, "", "r.md", md)
+	u, _ := url.Parse(res.URL)
+	page := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+	body := page.Body.String()
+	for _, want := range []string{"<h1>Title</h1>", "<table>", "<del>2</del>", `type="checkbox"`, `href="https://example.com/auto"`, `data-view="md"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	// Only the viewer's own script may exist; no raw HTML from the markdown survives.
+	if strings.Count(body, "<script") != 1 {
+		t.Errorf("unexpected script tags: %d", strings.Count(body, "<script"))
+	}
+	rendered := body[strings.Index(body, `id="md"`):strings.Index(body, `id="txt"`)]
+	rendered = strings.ReplaceAll(rendered, `<img src="" alt="i">`, "") // markdown image with neutralised target
+	for _, bad := range []string{"<script", "<img", "<iframe", "onerror=\"", "onerror=a", "javascript:alert", "JaVaScRiPt:", "data:text/html"} {
+		if strings.Contains(rendered, bad) {
+			t.Errorf("rendered markdown contains %q:\n%s", bad, rendered)
+		}
+	}
+	csp := page.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' data:") || strings.Contains(csp, "https:") || strings.Contains(csp, "unsafe-inline'; img") || strings.Contains(csp, "script-src 'unsafe") {
+		t.Errorf("CSP %q", csp)
+	}
+	if raw := get(h, u.EscapedPath()+"?raw", "Sec-Fetch-Dest", "document"); raw.Body.String() != md {
+		t.Errorf("raw markdown altered")
+	}
+}
+
+// inlineScript returns the body of the page's only <script>, byte for byte.
+func inlineScript(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, "<script>")
+	j := strings.Index(body, "</script>")
+	if i < 0 || j < i || strings.Count(body, "<script") != 1 {
+		t.Fatalf("expected exactly one inline script")
+	}
+	return body[i+len("<script>") : j]
+}
+
+func viewerPage(t *testing.T, h http.Handler, name, content string) (string, *httptest.ResponseRecorder) {
+	t.Helper()
+	_, res := doUpload(t, h, "", name, content)
+	u, _ := url.Parse(res.URL)
+	r := get(h, u.EscapedPath(), "Sec-Fetch-Dest", "document")
+	return r.Body.String(), r
+}
+
+func TestMarkdownLinkVectorsNeutralised(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	body, _ := viewerPage(t, h, "v.md", "<javascript:alert(1)>\n\n[a][ref] [b]( javascript:alert(2) ) [c](java&#115;cript:alert(3))\n\n[d](javascript&#58;alert(4))\n\n<vbscript:x> <data:text/html,x>\n\n[ref]: javascript:alert(5)\n")
+	rendered := body[strings.Index(body, `id="md"`):strings.Index(body, `id="txt"`)]
+	// Visible text may mention the scheme; no link target or tag may carry it.
+	for _, m := range regexp.MustCompile(`(?i)\s(?:href|src)="([^"]*)"`).FindAllStringSubmatch(rendered, -1) {
+		if v := strings.ToLower(m[1]); v != "" && !strings.HasPrefix(v, "http") {
+			t.Errorf("unexpected link target %q in:\n%s", m[1], rendered)
+		}
+	}
+	for _, bad := range []string{"<script", "<img", "<iframe", " onerror", " onclick"} {
+		if strings.Contains(strings.ToLower(rendered), bad) {
+			t.Errorf("rendered markdown contains %q:\n%s", bad, rendered)
+		}
+	}
+	if !strings.Contains(rendered, `<a href="">`) {
+		t.Errorf("expected neutralised links:\n%s", rendered)
+	}
+}
+
+func TestMarkdownSizeCapAndTimeBudget(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.MaxBytes = 8 << 20 })
+	h := a.routes()
+	for name, src := range map[string]string{
+		"link.md": strings.Repeat("[a](<", 20000),
+		"gt.md":   strings.Repeat(">", 30000),
+		"huge.md": strings.Repeat(">", 300000), // over the cap: must not be rendered at all
+	} {
+		start := time.Now()
+		body, r := viewerPage(t, h, name, src)
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%s: took %v", name, d)
+		}
+		if r.Code != 200 || !strings.Contains(body, "?dl") {
+			t.Errorf("%s: %d", name, r.Code)
+		}
+		if name == "huge.md" && (strings.Contains(body, `id="md"`) || !strings.Contains(body, "nicht gerendert")) {
+			t.Errorf("%s: oversized markdown was rendered or no notice", name)
+		}
+	}
+	if renderMarkdown(strings.Repeat("x", markdownMaxBytes+1)) != "" {
+		t.Errorf("cap not applied")
+	}
+	// A busy renderer falls back to the source instead of waiting.
+	markdownSlots <- struct{}{}
+	markdownSlots <- struct{}{}
+	defer func() { <-markdownSlots; <-markdownSlots }()
+	if body, _ := viewerPage(t, h, "busy.md", "# hi"); strings.Contains(body, `id="md"`) || !strings.Contains(body, "# hi") {
+		t.Errorf("busy fallback")
+	}
+}
+
+func TestCSVRowCapNotice(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	var sb strings.Builder
+	sb.WriteString("a,b\n")
+	for i := 0; i < viewerMaxRows+10; i++ {
+		sb.WriteString("1,2\n")
+	}
+	body, _ := viewerPage(t, h, "big.csv", sb.String())
+	if !strings.Contains(body, "Die Tabelle zeigt nur die ersten 5000 Zeilen") {
+		t.Errorf("missing CSV cap notice")
+	}
+	if body, _ := viewerPage(t, h, "small.csv", "a,b\n1,2\n"); strings.Contains(body, "Die Tabelle zeigt nur") {
+		t.Errorf("unexpected notice")
+	}
+}
+
+func TestJSONRawKeepsType(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	_, res := doUpload(t, h, "", "d.json", `{"a":1}`)
+	u, _ := url.Parse(res.URL)
+	if r := get(h, u.EscapedPath()); r.Header().Get("Content-Type") != "application/json" || !strings.HasPrefix(r.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Errorf("json raw: %q", r.Header().Get("Content-Type"))
+	}
+	if body, r := viewerPage(t, h, "d2.json", `{"a":1}`); !strings.HasPrefix(r.Header().Get("Content-Type"), "text/html") || !strings.Contains(body, "&#34;a&#34;") {
+		t.Errorf("json viewer missing")
+	}
+	_, res = doUpload(t, h, "", "d.xml", "<a/>")
+	u, _ = url.Parse(res.URL)
+	if r := get(h, u.EscapedPath()); r.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Errorf("xml raw: %q", r.Header().Get("Content-Type"))
+	}
+}
+
+func TestTextNames(t *testing.T) {
+	for _, n := range []string{".gitignore", ".editorconfig", ".bashrc", "LICENSE", "README", "Jenkinsfile", "Gemfile", "Dockerfile.dev", "Containerfile.x", "go.mod", "go.sum", "a.lock", "a.proto", "a.tf", "a.nix", "a.gql"} {
+		if !isTextFile(n) {
+			t.Errorf("%s not text", n)
+		}
+	}
+	for _, n := range []string{"a.html", "a.svg", "a.png", "a.bin", "licensed.exe"} {
+		if isTextFile(n) {
+			t.Errorf("%s is text", n)
+		}
+	}
+}
+
+func TestViewerSingularLineAndCopyLimit(t *testing.T) {
+	a := newTestApp(t, func(c *config) { c.MaxBytes = 16 << 20 })
+	h := a.routes()
+	body, _ := viewerPage(t, h, "one.log", strings.Repeat("x", viewerMaxBytes+10))
+	if strings.Contains(body, "ersten 1 Zeilen") || !strings.Contains(body, "id=\"copy\"") {
+		t.Errorf("grammar/copy: %s", body[:300])
+	}
+	body, _ = viewerPage(t, h, "huge.log", strings.Repeat("0123456789abcdef\n", (viewerMaxCopy/17)+1000))
+	if strings.Contains(body, `id="copy"`) {
+		t.Errorf("copy button shown for huge file")
 	}
 }
