@@ -828,6 +828,12 @@ func TestPutNameCannotEscapeTokenDir(t *testing.T) {
 // is enforced while streaming, and the reserved byte budget is refunded.
 func TestPutChunkedOversizeRefundsBudget(t *testing.T) {
 	a := newTestApp(t, func(c *config) { c.UploadMBPerHour = 1; c.MinFreeBytes = 1 })
+	// Freeze the byte budget's clock: at 1 MiB/h it refills ~290 B/s, so a few
+	// milliseconds between the uploads would let the final 1-byte PUT through.
+	now := time.Now()
+	for _, l := range []*limiter{a.uploadBytes.client, a.uploadBytes.net} {
+		l.now = func() time.Time { return now }
+	}
 	h := a.routes()
 	req := httptest.NewRequest("PUT", "/big.bin", io.MultiReader(strings.NewReader(strings.Repeat("x", int(a.cfg.MaxBytes)+1))))
 	req.ContentLength = -1
