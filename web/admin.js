@@ -65,15 +65,17 @@ async function load() {
 			el("td", { class: "hide-sm" }, fmtDate(f.time)),
 			el("td", { class: "num" }, f.deleted ? "gelöscht" : fmtSize(f.size)),
 			el("td", { class: "hide-sm mono" }, f.crc32.toString(16).padStart(8, "0")),
-			el("td", { class: "num" }, f.deleted ? "" : el("button", {
-				type: "button", class: "btn btn-ghost btn-sm btn-danger",
-				onclick: async (e) => {
-					if (!confirm(`${f.filename} löschen?`)) return;
-					e.currentTarget.disabled = true;
-					try { await api("/api/admin/delete", { id: f.id }); load(); }
-					catch (err) { toast(err.message); }
-				},
-			}, "Löschen")),
+			el("td", { class: "num" }, f.deleted ? "" : el("span", { class: "actions" },
+				f.inline ? downloadLink(f.url, f.filename) : "",
+				el("button", {
+					type: "button", class: "btn btn-ghost btn-sm btn-danger",
+					onclick: async (e) => {
+						if (!confirm(`${f.filename} löschen?`)) return;
+						e.currentTarget.disabled = true;
+						try { await api("/api/admin/delete", { id: f.id }); load(); }
+						catch (err) { toast(err.message); }
+					},
+				}, "Löschen"))),
 		);
 		return row;
 	}));

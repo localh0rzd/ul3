@@ -74,6 +74,11 @@ function fileKind(file) {
 	return { kind, ext, label: FILE_KINDS[kind].label, textual };
 }
 
+// "?dl" makes the server answer with Content-Disposition: attachment.
+function downloadLink(url, name, cls = "btn btn-ghost btn-sm") {
+	return el("a", { class: cls, href: url + (url.includes("?") ? "&" : "?") + "dl", download: name }, "Herunterladen");
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 function fileIcon(kind, ext) {
 	const wrap = document.createElement("span");

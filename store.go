@@ -41,6 +41,7 @@ type upload struct {
 	Deleted  bool   `json:"deleted"`
 	URL      string `json:"url,omitempty"`
 	Size     int64  `json:"size"`
+	Inline   bool   `json:"inline"`
 }
 
 type cronStatus struct {

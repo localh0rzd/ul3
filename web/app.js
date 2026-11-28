@@ -71,6 +71,7 @@ function emptyRow() {
 function fileRow(f, fresh = false) {
 	const link = el("a", { href: f.url, target: "_blank", rel: "noopener", title: fmtDate(f.time) }, f.filename);
 	const actions = el("span", { class: "actions" },
+		f.inline ? downloadLink(f.url, f.filename) : "",
 		el("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => copy(f.url) }, "Link kopieren"),
 		el("button", { type: "button", class: "btn btn-ghost btn-sm btn-danger", onclick: (e) => deleteFile(f, row, e.currentTarget) }, "Löschen"),
 	);
@@ -212,7 +213,7 @@ function progressItem(file, onCancel) {
 		progress(p) { bar.style.width = `${p}%`; status.textContent = `${p} %`; },
 		fail(msg) { li.classList.add("err"); status.textContent = msg; },
 		cancelled() { li.classList.add("cancelled"); status.textContent = "abgebrochen"; },
-		done(url) {
+		done(url, name, inline) {
 			li.classList.add("ok");
 			bar.style.width = "100%";
 			status.textContent = fmtSize(file.size);
@@ -221,6 +222,7 @@ function progressItem(file, onCancel) {
 				input,
 				el("button", { type: "button", class: "btn btn-sm", onclick: () => copy(url) }, "Kopieren"),
 				el("a", { class: "btn btn-sm", href: url, target: "_blank", rel: "noopener" }, "Öffnen"),
+				inline ? downloadLink(url, name, "btn btn-sm") : "",
 			));
 		},
 	};
@@ -241,9 +243,9 @@ function upload(job) {
 			const res = xhr.response || {};
 			if (xhr.status === 200 && res.success != null) {
 				setState(job, "done");
-				item.done(res.url);
+				item.done(res.url, res.filename, res.inline);
 				$("#empty")?.remove();
-				tbody.prepend(fileRow({ id: res.success, filename: res.filename, url: res.url, time: Date.now() / 1000, size: file.size }, true));
+				tbody.prepend(fileRow({ id: res.success, filename: res.filename, url: res.url, inline: res.inline, time: Date.now() / 1000, size: file.size }, true));
 			} else {
 				setState(job, "failed");
 				item.fail(res.error || `Fehler (HTTP ${xhr.status})`);

@@ -431,6 +431,7 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 		"success":  id,
 		"url":      a.fileURL(r, saved),
 		"filename": displayName(saved),
+		"inline":   opensInline(saved),
 	})
 }
 
@@ -548,6 +549,7 @@ func (a *app) handleHistory(w http.ResponseWriter, r *http.Request) {
 		list[i].Owner = ""
 		list[i].URL = a.fileURL(r, list[i].Filename)
 		list[i].Size = a.fileSize(list[i].Filename)
+		list[i].Inline = opensInline(list[i].Filename)
 		list[i].Filename = displayName(list[i].Filename)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"files": list})
@@ -675,6 +677,17 @@ func alwaysDownload(ct string) bool {
 	return essence == "text/html" || essence == "application/xhtml+xml"
 }
 
+// opensInline reports whether a browser shows the stored file in the page when
+// its link is opened, i.e. serveStored sends it without Content-Disposition.
+func opensInline(name string) bool {
+	if mediaType(name) != "" {
+		return true
+	}
+	ct := uploadContentType(name)
+	essence, _, _ := mime.ParseMediaType(ct)
+	return !alwaysDownload(ct) && essence != "application/octet-stream"
+}
+
 func uploadContentType(name string) string {
 	if ct := mediaType(name); ct != "" {
 		return ct
@@ -702,6 +715,7 @@ func (a *app) handleAdminList(w http.ResponseWriter, r *http.Request) {
 		list[i].URL = a.fileURL(r, list[i].Filename)
 		if !list[i].Deleted {
 			list[i].Size = a.fileSize(list[i].Filename)
+			list[i].Inline = opensInline(list[i].Filename)
 		}
 		list[i].Filename = displayName(list[i].Filename)
 	}
