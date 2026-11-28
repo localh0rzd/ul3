@@ -156,13 +156,15 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; background: var(--card); 
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; background: var(--head); border-bottom: 1px solid var(--border); }
 .name { flex: 1 1 12em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .meta { color: var(--muted); font-size: .9em; white-space: nowrap; }
-.btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.btns { position: relative; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .btn { font: inherit; font-size: .9em; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); text-decoration: none; cursor: pointer; }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn.sq { display: inline-flex; padding: 4px 7px; }
 .btn svg { width: 1.25em; height: 1.25em; margin: .125em 0; fill: currentColor; } /* as tall as a text line */
 .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-#msg { color: var(--ok); font-size: .9em; min-width: 1px; }
+/* tooltip under the buttons, so showing it never shifts the layout */
+#msg { position: absolute; top: calc(100% + 6px); right: 0; z-index: 1; white-space: nowrap; pointer-events: none; padding: 4px 10px; border-radius: 6px; font-size: .85em; background: var(--text); color: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+#msg:empty { display: none; }
 .note { margin: 0; padding: 8px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .9em; }
 .scroll { overflow-x: auto; }
 .code { margin: 0; padding: 8px 0; counter-reset: n; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; width: max-content; min-width: 100%; }
