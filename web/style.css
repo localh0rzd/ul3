@@ -76,7 +76,7 @@ nav a:hover { color: var(--text); text-decoration: none; }
 	.install-btn, .install-hint .btn { min-width: 40px; min-height: 40px; justify-content: center; }
 }
 
-main { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; display: grid; gap: 20px; }
+main { max-width: 1400px; margin: 0 auto; padding: 24px 16px 40px; display: grid; gap: 20px; }
 .card {
 	background: var(--card);
 	border: 1px solid var(--border);
