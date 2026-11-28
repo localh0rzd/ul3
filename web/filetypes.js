@@ -74,9 +74,28 @@ function fileKind(file) {
 	return { kind, ext, label: FILE_KINDS[kind].label, textual };
 }
 
+// Static icon markup, never user input.
+const ICONS = {
+	download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3V3zM5 18h14v3H5v-3z"/></svg>',
+	copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>',
+};
+
+// Icon-only button or link; the label goes to title and aria-label.
+function iconEl(tag, icon, label, props = {}) {
+	const e = el(tag, { ...props, title: label });
+	e.setAttribute("aria-label", label);
+	e.classList.add("btn-sq");
+	e.innerHTML = ICONS[icon];
+	return e;
+}
+
 // "?dl" makes the server answer with Content-Disposition: attachment.
 function downloadLink(url, name, cls = "btn btn-ghost btn-sm") {
-	return el("a", { class: cls, href: url + (url.includes("?") ? "&" : "?") + "dl", download: name }, "Herunterladen");
+	return iconEl("a", "download", "Herunterladen", { class: cls, href: url + (url.includes("?") ? "&" : "?") + "dl", download: name });
+}
+
+function copyButton(label, onclick, cls = "btn btn-ghost btn-sm") {
+	return iconEl("button", "copy", label, { type: "button", class: cls, onclick });
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";

@@ -159,6 +159,8 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; background: var(--card); 
 .btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .btn { font: inherit; font-size: .9em; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); text-decoration: none; cursor: pointer; }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.sq { display: inline-flex; padding: 4px 7px; }
+.btn svg { width: 1.25em; height: 1.25em; margin: .125em 0; fill: currentColor; } /* as tall as a text line */
 .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #msg { color: var(--ok); font-size: .9em; min-width: 1px; }
 .note { margin: 0; padding: 8px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: .9em; }
@@ -200,8 +202,8 @@ td.n::before { content: counter(r); }
 {{if .Rendered}}<button type="button" class="btn" data-view="md" aria-pressed="true">Gerendert</button><button type="button" class="btn" data-view="txt" aria-pressed="false">Quelltext</button>{{end}}
 {{if .Table}}<button type="button" class="btn" data-view="tbl" aria-pressed="true">Tabelle</button><button type="button" class="btn" data-view="txt" aria-pressed="false">Text</button>{{end}}
 <a class="btn" href="{{.Raw}}">Raw</a>
-{{if .CanCopy}}<button type="button" class="btn" id="copy" data-src="{{.Raw}}">Kopieren</button>{{end}}
-<a class="btn" href="{{.Download}}" download="{{.Name}}">Herunterladen</a>
+{{if .CanCopy}}<button type="button" class="btn sq" id="copy" data-src="{{.Raw}}" title="Kopieren" aria-label="Kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg></button>{{end}}
+<a class="btn sq" href="{{.Download}}" download="{{.Name}}" title="Herunterladen" aria-label="Herunterladen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3V3zM5 18h14v3H5v-3z"/></svg></a>
 <span id="msg" role="status"></span>
 </span>
 </div>
@@ -275,7 +277,7 @@ func (a *app) serveViewer(w http.ResponseWriter, r *http.Request, name string, f
 		} else if len(lines) > 1 {
 			shown = "nur die ersten " + strconv.Itoa(len(lines)) + " Zeilen"
 		}
-		notices = append(notices, "Große Datei: Es wird "+shown+" angezeigt. Die vollständige Datei gibt es über „Raw“ oder „Herunterladen“.")
+		notices = append(notices, "Große Datei: Es wird "+shown+" angezeigt. Die vollständige Datei gibt es über „Raw“ oder den Download-Knopf.")
 	}
 	notice := strings.Join(notices, " ")
 	lineCount := ""

@@ -72,7 +72,7 @@ function fileRow(f, fresh = false) {
 	const link = el("a", { href: f.url, target: "_blank", rel: "noopener", title: fmtDate(f.time) }, f.filename);
 	const actions = el("span", { class: "actions" },
 		f.inline ? downloadLink(f.url, f.filename) : "",
-		el("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => copy(f.url) }, "Link kopieren"),
+		copyButton("Link kopieren", () => copy(f.url)),
 		el("button", { type: "button", class: "btn btn-ghost btn-sm btn-danger", onclick: (e) => deleteFile(f, row, e.currentTarget) }, "Löschen"),
 	);
 	const row = el("tr", { class: fresh ? "fresh" : "" },
@@ -220,7 +220,7 @@ function progressItem(file, onCancel) {
 			const input = el("input", { type: "text", readOnly: true, value: url, onfocus: (e) => e.target.select() });
 			li.append(el("div", { class: "link" },
 				input,
-				el("button", { type: "button", class: "btn btn-sm", onclick: () => copy(url) }, "Kopieren"),
+				copyButton("Link kopieren", () => copy(url), "btn btn-sm"),
 				el("a", { class: "btn btn-sm", href: url, target: "_blank", rel: "noopener" }, "Öffnen"),
 				inline ? downloadLink(url, name, "btn btn-sm") : "",
 			));

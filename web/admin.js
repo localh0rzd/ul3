@@ -61,10 +61,10 @@ async function load() {
 		const row = el("tr", { class: f.deleted ? "deleted" : "" },
 			el("td", { class: "mono" }, String(f.id)),
 			el("td", { class: "fname" }, f.deleted ? f.filename : el("a", { href: f.url, target: "_blank", rel: "noopener" }, f.filename)),
-			el("td", { class: "hide-sm mono" }, f.owner || "–"),
+			el("td", { class: "hide-sm mono uuid" }, f.owner || "–"),
 			el("td", { class: "hide-sm" }, fmtDate(f.time)),
 			el("td", { class: "num" }, f.deleted ? "gelöscht" : fmtSize(f.size)),
-			el("td", { class: "hide-sm mono" }, f.crc32.toString(16).padStart(8, "0")),
+			el("td", { class: "hide-md mono" }, f.crc32.toString(16).padStart(8, "0")),
 			el("td", { class: "num" }, f.deleted ? "" : el("span", { class: "actions" },
 				f.inline ? downloadLink(f.url, f.filename) : "",
 				el("button", {

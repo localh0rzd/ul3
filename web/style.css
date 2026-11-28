@@ -112,6 +112,7 @@ h2 { font-size: 1.25rem; margin: 0 0 12px; }
 .btn-ghost { background: transparent; }
 .btn-danger { color: var(--danger); }
 .btn svg { width: 1.2em; height: 1.2em; fill: currentColor; }
+.btn-sq { padding-inline: 5px; }
 label.btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .progress-list { list-style: none; margin: 24px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; text-align: left; }
@@ -352,6 +353,8 @@ footer a { color: var(--muted); }
 .stats strong { color: var(--text); }
 td.mono { font-family: var(--mono); font-size: .85rem; }
 tr.deleted td { color: var(--muted); }
+td.uuid { word-break: break-all; }
+@media (max-width: 800px) { .hide-md { display: none; } }
 
 @media (max-width: 640px) {
 	.hide-sm { display: none; }
