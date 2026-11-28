@@ -77,6 +77,9 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/delete", a.handleDelete)
 	mux.HandleFunc("POST /api/admin/login", a.handleAdminLogin)
 	mux.HandleFunc("POST /api/admin/logout", a.handleAdminLogout)
+	mux.HandleFunc("GET /api/admin/session", a.admin(func(w http.ResponseWriter, r *http.Request) { // lets the main page tell whether an admin is signed in
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}))
 	mux.HandleFunc("GET /api/admin/uploads", a.admin(a.handleAdminList))
 	mux.HandleFunc("POST /api/admin/delete", a.admin(a.handleAdminDelete))
 	mux.HandleFunc("POST /api/admin/cleanup", a.admin(a.handleAdminCleanup))

@@ -414,6 +414,17 @@ func TestAdminLockout(t *testing.T) {
 	}
 }
 
+func TestAdminSession(t *testing.T) {
+	a := newTestApp(t, nil)
+	h := a.routes()
+	if r := get(h, "/api/admin/session"); r.Code != 401 {
+		t.Fatalf("signed out: %d, want 401", r.Code)
+	}
+	if r := get(h, "/api/admin/session", "Authorization", "Bearer "+a.cfg.AdminPassword); r.Code != 200 {
+		t.Fatalf("signed in: %d, want 200", r.Code)
+	}
+}
+
 // Follow-up to dropping the global lockout: rotating through the /64s of one
 // IPv6 /48 must not give an attacker 10 fresh guesses per /64.
 func TestAdminLockoutCoversIPv6Slash48(t *testing.T) {

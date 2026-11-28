@@ -721,7 +721,11 @@ async function init() {
 	} catch { /* keep defaults */ }
 	$("#maxsize").textContent = fmtSize(cfg.maxBytes);
 	$("#retention").textContent = `${cfg.retentionDays} ${cfg.retentionDays === 1 ? "Tag" : "Tage"}`;
-	$("#admin-link").hidden = !cfg.admin;
+	if (cfg.admin) {
+		// Signed-in admins get the link in the top bar; everyone else finds it in the footer.
+		const signedIn = await fetch("/api/admin/session").then((r) => r.ok, () => false);
+		$(signedIn ? "#admin-link" : "#admin-footer-link").hidden = false;
+	}
 	renderUUID();
 	loadHistory();
 	loadShare();
