@@ -3,6 +3,7 @@
 Small anonymous file upload service – successor of ul2 (PHP).
 
 - Upload via button, drag & drop anywhere on the page, or paste (Ctrl+V or the paste button — files, images and text); parallel uploads with progress
+- Share to ul3 from Android: install the page as an app first (Chrome/Edge/Samsung Internet, "Install app"), then pick ul3 in the share sheet; shared files and text appear in the preview and upload only after you confirm
 - Each browser gets a random UUID (localStorage); the UUID lists and deletes its own uploads
 - Files keep their original name; each URL contains a random 128-bit token (`/files/<token>/<name>`), so links can't be guessed
 - Files expire after `RETENTION_DAYS` (built-in hourly cleanup, no cron needed)

@@ -628,6 +628,92 @@ $("#sharex-download").addEventListener("click", () => {
 	setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
+// Android "Share to": sw.js parks the shared payload in the Cache API and redirects to /?share=1.
+async function loadShare() {
+	const param = new URLSearchParams(location.search).get("share");
+	if (!param) return;
+	history.replaceState(null, "", location.pathname + location.hash);
+	if (param !== "1") {
+		self.caches?.delete("ul3-share").catch(() => {});
+		toast("Teilen fehlgeschlagen – bitte erneut versuchen");
+		return;
+	}
+	try {
+		const cache = await caches.open("ul3-share");
+		const metaRes = await cache.match("/share-data/meta");
+		if (!metaRes) throw new Error("no shared data");
+		const meta = await metaRes.json();
+		const files = [];
+		for (const [i, f] of meta.files.entries()) {
+			const res = await cache.match(`/share-data/${i}`);
+			if (res) files.push(new File([await res.blob()], f.name || "datei", { type: f.type }));
+		}
+		// text and url are often the same string (or the url is inside the text); skip duplicates
+		const parts = [];
+		for (const s of [meta.title, meta.text, meta.url]) {
+			const v = s.trim();
+			if (v && !files.some((f) => f.name === v) && !parts.some((p) => p.includes(v))) parts.push(v);
+		}
+		const text = textFile(parts.join("\n"));
+		stagePaste(text ? [...files, text] : files);
+	} catch {
+		toast("Teilen fehlgeschlagen – bitte erneut versuchen");
+	} finally {
+		self.caches?.delete("ul3-share").catch(() => {});
+	}
+}
+
+// Sharing into the already-open app navigates it, which would abort running uploads and drop staged files.
+window.addEventListener("beforeunload", (e) => {
+	if (active || queue.length || !preview.box.hidden) e.preventDefault();
+});
+
+// "App installieren": Chromium offers beforeinstallprompt; iOS Safari has none, so show a hint instead.
+const installBtn = $("#install-btn");
+const installHint = $("#install-hint");
+const isStandalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const ua = navigator.userAgent;
+const isIOS = /iPad|iPhone|iPod/.test(ua) || (ua.includes("Macintosh") && navigator.maxTouchPoints > 1);
+const isIOSSafari = isIOS && /Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|OPT\//.test(ua);
+let installPrompt = null;
+
+if (!isStandalone) {
+	if (isIOSSafari && !store("install-hint-closed")) {
+		const setHint = (open, closed) => {
+			installHint.hidden = !open;
+			installBtn.setAttribute("aria-expanded", String(open));
+			if (open) $("#install-hint-close").focus();
+			if (closed) { store("install-hint-closed", "1"); installBtn.hidden = true; }
+			else if (!open) installBtn.focus();
+		};
+		installBtn.hidden = false;
+		installBtn.addEventListener("click", () => setHint(installHint.hidden));
+		$("#install-hint-close").addEventListener("click", () => setHint(false, true));
+		installHint.addEventListener("keydown", (e) => {
+			if (e.key === "Escape") { e.stopPropagation(); setHint(false, true); }
+		});
+	} else {
+		window.addEventListener("beforeinstallprompt", (e) => {
+			e.preventDefault();
+			installPrompt = e;
+			installBtn.hidden = false;
+		});
+		installBtn.addEventListener("click", () => {
+			if (!installPrompt) return;
+			const ev = installPrompt;
+			installPrompt = null; // prompt() may only be used once
+			installBtn.hidden = true;
+			ev.prompt().catch(() => {});
+		});
+		window.addEventListener("appinstalled", () => {
+			installPrompt = null;
+			installBtn.hidden = true;
+		});
+	}
+}
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
 async function init() {
 	try {
 		const r = await fetch("/api/config");
@@ -638,5 +724,6 @@ async function init() {
 	$("#admin-link").hidden = !cfg.admin;
 	renderUUID();
 	loadHistory();
+	loadShare();
 }
 init();

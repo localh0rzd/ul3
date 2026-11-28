@@ -1112,3 +1112,96 @@ func TestHTMLUploadsAlwaysDownloaded(t *testing.T) {
 		t.Fatalf("txt: Content-Disposition %q, want inline", cd)
 	}
 }
+
+func TestManifestHasShareTarget(t *testing.T) {
+	h := newTestApp(t, nil).routes()
+	rec := get(h, "/manifest.json")
+	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/manifest+json") {
+		t.Fatalf("manifest: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var m struct {
+		StartURL string `json:"start_url"`
+		Display  string `json:"display"`
+		Icons    []struct {
+			Src   string `json:"src"`
+			Sizes string `json:"sizes"`
+		} `json:"icons"`
+		ShareTarget struct {
+			Action  string `json:"action"`
+			Method  string `json:"method"`
+			Enctype string `json:"enctype"`
+			Params  struct {
+				Title string `json:"title"`
+				Text  string `json:"text"`
+				URL   string `json:"url"`
+				Files []struct {
+					Name   string   `json:"name"`
+					Accept []string `json:"accept"`
+				} `json:"files"`
+			} `json:"params"`
+		} `json:"share_target"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	st := m.ShareTarget
+	if st.Action != "/share" || st.Method != "POST" || st.Enctype != "multipart/form-data" ||
+		st.Params.Title != "title" || st.Params.Text != "text" || st.Params.URL != "url" || // names sw.js reads
+		len(st.Params.Files) != 1 || st.Params.Files[0].Name != "files" || len(st.Params.Files[0].Accept) == 0 {
+		t.Fatalf("share_target: %+v", st)
+	}
+	if m.StartURL != "/" || m.Display != "standalone" {
+		t.Fatalf("start_url/display: %q %q", m.StartURL, m.Display)
+	}
+	sizes := map[string]bool{}
+	for _, ic := range m.Icons {
+		sizes[ic.Sizes] = true
+		r := get(h, ic.Src)
+		if r.Code != 200 || r.Header().Get("Content-Type") != "image/png" {
+			t.Errorf("icon %s: %d %q", ic.Src, r.Code, r.Header().Get("Content-Type"))
+		}
+	}
+	if !sizes["192x192"] || !sizes["512x512"] {
+		t.Errorf("missing 192/512 icons: %v", sizes)
+	}
+	if !strings.Contains(get(h, "/").Body.String(), `rel="manifest" href="/manifest.json"`) {
+		t.Error("index.html does not link the manifest")
+	}
+}
+
+func TestServiceWorkerServed(t *testing.T) {
+	rec := get(newTestApp(t, nil).routes(), "/sw.js")
+	if rec.Code != 200 || !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
+		t.Fatalf("sw.js: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("Cache-Control = %q", rec.Header().Get("Cache-Control"))
+	}
+	for _, want := range []string{`"/share"`, `"files"`, `"title"`, `"text"`, `"url"`, `"ul3-share"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("sw.js does not mention %s", want)
+		}
+	}
+	if app, _ := webFS.ReadFile("web/app.js"); !strings.Contains(string(app), `"ul3-share"`) {
+		t.Error("app.js does not read the ul3-share cache")
+	}
+}
+
+func TestShareFallbackStoresNothing(t *testing.T) {
+	a := newTestApp(t, nil)
+	body, ct := multipartBody(t, "11111111-2222-3333-4444-555555555555", "x.txt", "hello")
+	req := httptest.NewRequest("POST", "/share", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	a.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/?share=failed" {
+		t.Fatalf("got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	all, err := a.store.ListAll(req.Context())
+	if err != nil || len(all) != 0 {
+		t.Fatalf("uploads after /share: %v %v", all, err)
+	}
+	if entries, _ := os.ReadDir(a.filesDir); len(entries) != 0 {
+		t.Fatalf("files written: %d", len(entries))
+	}
+}

@@ -80,6 +80,11 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/uploads", a.admin(a.handleAdminList))
 	mux.HandleFunc("POST /api/admin/delete", a.admin(a.handleAdminDelete))
 	mux.HandleFunc("POST /api/admin/cleanup", a.admin(a.handleAdminCleanup))
+	// Web Share Target fallback: sw.js normally handles this POST. Without an
+	// active service worker nothing is read or stored; send the user back.
+	mux.HandleFunc("POST /share", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/?share=failed", http.StatusSeeOther)
+	})
 	mux.HandleFunc("GET /files/{token}/{name}", a.handleFile)
 	mux.HandleFunc("GET /files/{name}", a.handleLegacyFile) // ul2 links: files/<name>
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +92,9 @@ func (a *app) routes() http.Handler {
 	})
 	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
+		if r.URL.Path == "/manifest.json" {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
 		static.ServeHTTP(w, r)
 	}))
 	return a.logRequests(securityHeaders(mux))

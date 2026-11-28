@@ -60,6 +60,21 @@ kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 
 nav { display: flex; gap: 18px; overflow-x: auto; }
 nav a { color: var(--muted); white-space: nowrap; }
 nav a:hover { color: var(--text); text-decoration: none; }
+.install-btn { margin-left: auto; flex: none; }
+.install-hint {
+	position: absolute; top: calc(100% + 8px); right: 16px; left: 16px; max-width: 360px; margin-left: auto;
+	display: flex; align-items: flex-start; gap: 8px;
+	padding: 10px 12px; font-size: .9rem;
+	background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+	box-shadow: 0 6px 24px rgb(0 0 0 / .18);
+}
+.install-hint .btn { flex: none; padding: 0 7px; line-height: 1.6; }
+@media (max-width: 560px) {
+	.topbar { gap: 14px; padding: 0 12px; }
+	.install-label { display: none; }
+	.install-hint { left: 12px; right: 12px; }
+	.install-btn, .install-hint .btn { min-width: 40px; min-height: 40px; justify-content: center; }
+}
 
 main { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; display: grid; gap: 20px; }
 .card {
